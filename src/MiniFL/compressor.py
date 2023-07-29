@@ -20,9 +20,7 @@ class IdentityCompressor(Compressor):
         self.shapes = {k: v.shape for k, v in model.named_parameters()}
 
     def compress(self, grad_dict: Mapping[str, Tensor]) -> Collection[Tensor]:
-        return (
-            torch.cat(tuple(grad_dict[name].flatten() for name in sorted(grad_dict))),
-        )
+        return (torch.cat(tuple(grad_dict[name].flatten() for name in sorted(grad_dict))),)
 
     def decompress(self, data: Collection[Tensor]) -> Mapping[str, Tensor]:
         x = data[0]

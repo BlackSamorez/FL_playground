@@ -30,6 +30,9 @@ class GDClient:
         self.data_receiver = data_receiver
         self.compressor = IdentityCompressor()
 
+    def prepare(self):
+        pass
+
     def step(self) -> float:
         loss = self.send_grad_get_loss_()
         self.apply_global_step_()
@@ -75,6 +78,9 @@ class GDMaster:
         self.data_senders = data_senders
         self.data_receivers = data_receivers
         self.compressor = IdentityCompressor()
+
+    def prepare(self):
+        pass
 
     def step(self) -> float:
         self.model.zero_grad()

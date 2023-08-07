@@ -6,7 +6,7 @@ import torch
 from torch import Tensor, nn
 
 from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
-from MiniFL.compressor import IdentityCompressor
+from MiniFL.compressor import Compressor, Flattener, IdentityCompressor
 from MiniFL.utils import add_grad_dict, get_grad_dict
 
 
@@ -19,10 +19,13 @@ class Client:
         loss_fn,
         data_sender: DataSender,
         data_receiver: DataReceiver,
-        compressor: IdentityCompressor,
+        compressor: Compressor,
     ):
         self.data = data
+
         self.model = model
+        self.flattener = Flattener(shapes={k: v.shape for k, v in self.model.named_parameters()})
+
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=lr)
         self.loss_fn = loss_fn
         self.data_sender = data_sender
@@ -36,13 +39,13 @@ class Client:
         loss.backward()
 
         grad_dict = get_grad_dict(self.model)
-        msg = self.compressor.compress(grad_dict=grad_dict)
+        msg = self.compressor.compress(self.flattener.flatten(grad_dict))
         self.data_sender.send(msg)
         return float(loss)
 
     def apply_global_step(self):
         msg = self.data_receiver.recv()
-        grad_dict = self.compressor.decompress(msg)
+        grad_dict = self.flattener.unflatten(self.compressor.decompress(msg))
 
         self.optimizer.zero_grad()
         add_grad_dict(self.model, grad_dict=grad_dict)
@@ -57,11 +60,14 @@ class Master:
         model: nn.Module,
         data_senders: Collection[DataSender],
         data_receivers: Collection[DataReceiver],
-        compressors: Collection[IdentityCompressor],
+        compressors: Collection[Compressor],
         loss_fn,
     ):
         self.eval_data = eval_data
+
         self.model = model
+        self.flattener = Flattener(shapes={k: v.shape for k, v in self.model.named_parameters()})
+
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=lr)
 
         self.data_senders = data_senders
@@ -77,14 +83,14 @@ class Master:
         self.model.zero_grad()
         for receiver, compressor in zip(self.data_receivers, self.compressors):
             msg = receiver.recv()
-            grad_dict = compressor.decompress(msg)
+            grad_dict = self.flattener.unflatten(compressor.decompress(msg))
             add_grad_dict(self.model, grad_dict=grad_dict)
         self.scale_grads(1 / len(self.data_senders))
         self.optimizer.step()
 
         for sender, compressor in zip(self.data_senders, self.compressors):
             grad_dict = get_grad_dict(self.model)
-            msg = compressor.compress(grad_dict=grad_dict)
+            msg = compressor.compress(self.flattener.flatten(grad_dict))
             sender.send(msg)
 
         with torch.no_grad():
@@ -102,7 +108,7 @@ def get_master_and_clients(
 
     uplink_comms = [get_sender_receiver() for _ in range(num_clients)]
     downlink_comms = [get_sender_receiver() for _ in range(num_clients)]
-    compressors = [IdentityCompressor(model=model) for _ in range(num_clients)]
+    compressors = [IdentityCompressor() for _ in range(num_clients)]
     client_models = [deepcopy(model) for _ in range(num_clients)]
 
     master = Master(

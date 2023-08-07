@@ -1,39 +1,34 @@
 import math
-from typing import Collection
 
 import torch
-from torch import Tensor
+from torch import FloatTensor, Tensor
 
 from MiniFL.message import Message
 from MiniFL.utils import get_num_bits
 
-from .interfaces import Compressor
+from .interfaces import Compressor, UnbiasedCompressor
 
 
 class IdentityCompressor(Compressor):
     def __init__(self):
         pass
 
-    def compress(self, data: Collection[Tensor]) -> Message:
+    def compress(self, x: FloatTensor) -> Message:
         return Message(
-            data=data,
-            size=sum(tensor.numel() * get_num_bits(tensor.dtype) for tensor in data),
+            data=(x,),
+            size=x.numel() * get_num_bits(x.dtype),
         )
 
-    def decompress(self, msg: Message) -> Collection[Tensor]:
-        return msg.data
+    def decompress(self, msg: Message) -> FloatTensor:
+        return msg.data[0]
 
 
 class TopKBiasedCompressor(Compressor):
     def __init__(self, k: int):
         self.k = k
 
-    def compress(self, data: Collection[Tensor]) -> Message:
-        assert len(data) == 1
-        x = data[0]
-        assert x.dtype.is_floating_point
-
-        _, indexes = torch.topk(torch.abs(x.data), k=self.k, sorted=False)
+    def compress(self, x: FloatTensor) -> Message:
+        _, indexes = torch.topk(torch.abs(x), k=self.k, sorted=False)
         values = x[indexes]
 
         return Message(
@@ -43,23 +38,20 @@ class TopKBiasedCompressor(Compressor):
             metadata={"shape": x.shape},
         )
 
-    def decompress(self, msg: Message) -> Collection[Tensor]:
+    def decompress(self, msg: Message) -> FloatTensor:
         indexes, values = msg.data
         x = torch.zeros(msg.metadata["shape"], dtype=values.dtype, device=values.device)
         x[indexes] = values
-        return (x,)
+        return x
 
 
-class RandKCompressor(Compressor):
+class RandKBiasedCompressor(Compressor):
     def __init__(self, k: int, seed=0):
         self.k = k
         self.generator = torch.Generator()
         self.generator.manual_seed(seed)
 
-    def compress(self, data: Collection[Tensor]) -> Message:
-        assert len(data) == 1
-        x = data[0]
-
+    def compress(self, x: FloatTensor) -> Message:
         indexes = torch.randperm(x.numel(), generator=self.generator)[: self.k]
         values = x[indexes]
 
@@ -69,8 +61,19 @@ class RandKCompressor(Compressor):
             metadata={"shape": x.shape},
         )
 
-    def decompress(self, msg: Message) -> Collection[Tensor]:
+    def decompress(self, msg: Message) -> FloatTensor:
         indexes, values = msg.data
         x = torch.zeros(msg.metadata["shape"], dtype=values.dtype, device=values.device)
         x[indexes] = values
-        return (x,)
+        return x
+
+
+class RandKUnbiasedCompressor(RandKBiasedCompressor, UnbiasedCompressor):
+    def __init__(self, k: int):
+        super().__init__(k=k)
+
+    def compress(self, x: FloatTensor) -> Message:
+        n = x.numel()
+        msg = super().compress(x=x)
+        msg.data = (msg.data[0], msg.data[1] * (n / self.k))
+        return msg

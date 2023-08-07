@@ -1,7 +1,7 @@
 from typing import Collection, Mapping
 
 import torch
-from torch import Tensor, nn
+from torch import FloatTensor, Tensor, nn
 
 
 def get_grad_dict(module: nn.Module) -> Mapping[str, Tensor]:
@@ -24,12 +24,10 @@ class Flattener:
     def __init__(self, shapes: Mapping[str, torch.Size]) -> None:
         self.shapes = shapes
 
-    def flatten(self, tensors: Mapping[str, Tensor]) -> Collection[Tensor]:
-        return (torch.cat(tuple(tensors[name].flatten() for name in sorted(tensors))),)
+    def flatten(self, tensors: Mapping[str, FloatTensor]) -> FloatTensor:
+        return torch.cat(tuple(tensors[name].flatten() for name in sorted(tensors)))
 
-    def unflatten(self, data: Collection[Tensor]) -> Mapping[str, Tensor]:
-        assert len(data) == 1
-        x = data[0]
+    def unflatten(self, x: FloatTensor) -> Mapping[str, FloatTensor]:
         restored_tensors = {}
         for name in sorted(self.shapes):
             shape = self.shapes[name]

@@ -1,2 +1,1 @@
-import MiniFL.algorithms
-import MiniFL.compressors
+from . import algorithms, compressors, fn

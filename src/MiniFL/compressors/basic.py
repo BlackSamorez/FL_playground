@@ -23,18 +23,19 @@ class IdentityCompressor(Compressor):
         return msg.data[0]
 
 
-class TopKBiasedCompressor(Compressor):
-    def __init__(self, k: int):
-        self.k = k
+class TopPBiasedCompressor(Compressor):
+    def __init__(self, p: float):
+        self.p = p
 
     def compress(self, x: FloatTensor) -> Message:
-        _, indexes = torch.topk(torch.abs(x), k=self.k, sorted=False)
+        k = math.ceil(self.p * x.numel())
+        _, indexes = torch.topk(torch.abs(x), k=k, sorted=False)
         values = x[indexes]
 
         return Message(
             data=(indexes, values),
             size=values.numel() * get_num_bits(values.dtype)
-            + min(self.k * math.log2(x.numel()), (x.numel() - self.k) * math.log2(x.numel()), x.numel()),
+            + min(k * math.log2(x.numel()), (x.numel() - k) * math.log2(x.numel()), x.numel()),
             metadata={"shape": x.shape},
         )
 
@@ -45,19 +46,20 @@ class TopKBiasedCompressor(Compressor):
         return x
 
 
-class RandKBiasedCompressor(Compressor):
-    def __init__(self, k: int, seed=0):
-        self.k = k
+class RandPBiasedCompressor(Compressor):
+    def __init__(self, p: float, seed=0):
+        self.p = p
         self.generator = torch.Generator()
         self.generator.manual_seed(seed)
 
     def compress(self, x: FloatTensor) -> Message:
-        indexes = torch.randperm(x.numel(), generator=self.generator)[: self.k]
+        k = math.ceil(self.p * x.numel())
+        indexes = torch.randperm(x.numel(), generator=self.generator)[:k]
         values = x[indexes]
 
         return Message(
             data=(indexes, values),
-            size=values.numel() * get_num_bits(values.dtype),
+            size=k * get_num_bits(values.dtype),
             metadata={"shape": x.shape},
         )
 
@@ -68,14 +70,14 @@ class RandKBiasedCompressor(Compressor):
         return x
 
 
-class RandKUnbiasedCompressor(RandKBiasedCompressor, UnbiasedCompressor):
-    def __init__(self, k: int):
-        super().__init__(k=k)
+class RandPUnbiasedCompressor(RandPBiasedCompressor, UnbiasedCompressor):
+    def __init__(self, p: float):
+        super().__init__(p=p)
 
     def compress(self, x: FloatTensor) -> Message:
-        n = x.numel()
         msg = super().compress(x=x)
-        msg.data = (msg.data[0], msg.data[1] * (n / self.k))
+        scale = x.numel() / math.ceil(self.p * x.numel())
+        msg.data = (msg.data[0], msg.data[1] * scale)
         return msg
 
 

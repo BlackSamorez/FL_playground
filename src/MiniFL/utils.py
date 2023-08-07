@@ -10,7 +10,10 @@ def get_grad_dict(module: nn.Module) -> Mapping[str, Tensor]:
 
 def add_grad_dict(module: nn.Module, grad_dict: Mapping[str, Tensor]):
     for k, v in module.named_parameters():
-        v.grad = grad_dict[k]
+        if v.grad is None:
+            v.grad = grad_dict[k]
+        else:
+            v.grad += grad_dict[k]
 
 
 def get_num_bits(dtype: torch.dtype) -> int:

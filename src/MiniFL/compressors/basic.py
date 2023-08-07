@@ -77,3 +77,28 @@ class RandKUnbiasedCompressor(RandKBiasedCompressor, UnbiasedCompressor):
         msg = super().compress(x=x)
         msg.data = (msg.data[0], msg.data[1] * (n / self.k))
         return msg
+
+
+class PermKUnbiasedCompressor(UnbiasedCompressor):
+    def __init__(self, rank: int, world_size: int, seed=0):
+        self.rank = rank
+        self.world_size = world_size
+        self.generator = torch.Generator()
+        self.generator.manual_seed(seed)
+
+    def compress(self, x: FloatTensor) -> Message:
+        partition_id = torch.randperm(self.world_size, generator=self.generator)[self.rank]
+        indexes = torch.tensor_split(torch.randperm(x.numel(), generator=self.generator), self.world_size)[partition_id]
+        values = x[indexes] * self.world_size
+
+        return Message(
+            data=(indexes, values),
+            size=values.numel() * get_num_bits(values.dtype),
+            metadata={"shape": x.shape},
+        )
+
+    def decompress(self, msg: Message) -> FloatTensor:
+        indexes, values = msg.data
+        x = torch.zeros(msg.metadata["shape"], dtype=values.dtype, device=values.device)
+        x[indexes] = values
+        return x

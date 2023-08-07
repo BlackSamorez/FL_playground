@@ -1,8 +1,11 @@
+import math
 from abc import ABC, abstractmethod
 from typing import Collection, Mapping
 
 import torch
 from torch import Tensor, nn
+
+from MiniFL.message import Message
 
 from .message import Message
 from .utils import get_num_bits
@@ -28,7 +31,7 @@ class Flattener:
 
 class Compressor(ABC):
     @abstractmethod
-    def compress(self, named_tensors: Collection[Tensor]) -> Message:
+    def compress(self, data: Collection[Tensor]) -> Message:
         pass
 
     @abstractmethod
@@ -48,3 +51,32 @@ class IdentityCompressor(Compressor):
 
     def decompress(self, msg: Message) -> Collection[Tensor]:
         return msg.data
+
+
+class TopKBiasedCompressor(Compressor):
+    def __init__(self, k: int):
+        self.k = k
+
+    def compress(self, data: Collection[Tensor]) -> Message:
+        assert len(data) == 1
+        x = data[0]
+        assert x.dtype.is_floating_point
+
+        _, indexes = torch.topk(torch.abs(x.data), k=self.k, sorted=False)
+        masks = torch.zeros_like(x, dtype=torch.uint8)
+        masks[indexes] = 1
+
+        values = x[indexes]
+
+        return Message(
+            data=(indexes, values),
+            size=values.numel() * get_num_bits(values.dtype)
+            + min(self.k * math.log2(x.numel()), (x.numel() - self.k) * math.log2(x.numel()), x.numel()),
+            metadata={"shape": x.shape},
+        )
+
+    def decompress(self, msg: Message) -> Collection[Tensor]:
+        indexes, values = msg.data
+        x = torch.zeros(msg.metadata["shape"], dtype=values.dtype, device=values.device)
+        x[indexes] = values
+        return (x,)

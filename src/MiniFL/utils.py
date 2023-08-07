@@ -25,7 +25,7 @@ class Flattener:
         self.shapes = shapes
 
     def flatten(self, tensors: Mapping[str, FloatTensor]) -> FloatTensor:
-        return torch.cat(tuple(tensors[name].flatten() for name in sorted(tensors)))
+        return torch.cat(tuple(tensors[name].clone().detach().flatten() for name in sorted(tensors)))
 
     def unflatten(self, x: FloatTensor) -> Mapping[str, FloatTensor]:
         restored_tensors = {}

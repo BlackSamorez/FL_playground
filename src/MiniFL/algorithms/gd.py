@@ -6,8 +6,8 @@ import torch
 from torch import Tensor, nn
 
 from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
-from MiniFL.compressor import Compressor, Flattener, IdentityCompressor
-from MiniFL.utils import add_grad_dict, get_grad_dict
+from MiniFL.compressors import Compressor, IdentityCompressor
+from MiniFL.utils import Flattener, add_grad_dict, get_grad_dict
 
 
 class Client:

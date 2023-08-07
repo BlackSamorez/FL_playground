@@ -1,4 +1,4 @@
-from typing import Mapping
+from typing import Collection, Mapping
 
 import torch
 from torch import Tensor, nn
@@ -18,3 +18,21 @@ def get_num_bits(dtype: torch.dtype) -> int:
         return torch.finfo(dtype).bits
     else:
         return torch.iinfo(dtype).bits
+
+
+class Flattener:
+    def __init__(self, shapes: Mapping[str, torch.Size]) -> None:
+        self.shapes = shapes
+
+    def flatten(self, tensors: Mapping[str, Tensor]) -> Collection[Tensor]:
+        return (torch.cat(tuple(tensors[name].flatten() for name in sorted(tensors))),)
+
+    def unflatten(self, data: Collection[Tensor]) -> Mapping[str, Tensor]:
+        assert len(data) == 1
+        x = data[0]
+        restored_tensors = {}
+        for name in sorted(self.shapes):
+            shape = self.shapes[name]
+            restored_tensors[name] = x[: shape.numel()].view(*shape)
+            x = x[shape.numel() :]
+        return restored_tensors

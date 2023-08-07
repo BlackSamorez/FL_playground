@@ -1,2 +1,2 @@
 import MiniFL.algorithms
-from MiniFL.compressor import Compressor
+import MiniFL.compressors

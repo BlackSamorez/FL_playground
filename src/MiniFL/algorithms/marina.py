@@ -9,12 +9,14 @@ from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
 from MiniFL.compressors import Compressor, IdentityCompressor, PermKUnbiasedCompressor
 from MiniFL.utils import Flattener, add_grad_dict, get_grad_dict
 
+from .interfaces import Client, Master
+
 
 def get_c(generator: torch.Generator, p: float) -> bool:
     return bool(torch.bernoulli(torch.Tensor([p]), generator=generator).item())
 
 
-class MarinaClient:
+class MarinaClient(Client):
     def __init__(
         self,
         # Task
@@ -88,7 +90,7 @@ class MarinaClient:
         self.optimizer.step()
 
 
-class MarinaMaster:
+class MarinaMaster(Master):
     def __init__(
         self,
         # Task

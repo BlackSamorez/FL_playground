@@ -9,8 +9,10 @@ from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
 from MiniFL.compressors import Compressor, IdentityCompressor
 from MiniFL.utils import Flattener, add_grad_dict, get_grad_dict
 
+from .interfaces import Client, Master
 
-class GDClient:
+
+class GDClient(Client):
     def __init__(
         self,
         data: Tuple[Tensor, Tensor],
@@ -58,7 +60,7 @@ class GDClient:
         self.optimizer.step()
 
 
-class GDMaster:
+class GDMaster(Master):
     def __init__(
         self,
         eval_data: Tuple[Tensor, Tensor],

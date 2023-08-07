@@ -6,7 +6,7 @@ import torch
 from torch import Tensor, nn
 
 from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
-from MiniFL.compressors import Compressor, IdentityCompressor
+from MiniFL.compressors import Compressor, IdentityCompressor, PermKUnbiasedCompressor
 from MiniFL.utils import Flattener, add_grad_dict, get_grad_dict
 
 
@@ -210,3 +210,28 @@ def get_marina_master_and_clients(
         clients.append(client)
 
     return master, clients
+
+
+def get_permk_marina_master_and_clients(
+    clients_data: Collection[Collection[Tuple[Tensor, Tensor]]],
+    eval_data: Collection[Tuple[Tensor, Tensor]],
+    model: nn.Module,
+    loss_fn,
+    gamma: float,
+    p: float,
+    compressors_seed: int = 0,
+    seed: int = 0,
+) -> Tuple[MarinaMaster, Collection[MarinaClient]]:
+    return get_marina_master_and_clients(
+        clients_data=clients_data,
+        eval_data=eval_data,
+        model=model,
+        loss_fn=loss_fn,
+        compressors=[
+            PermKUnbiasedCompressor(rank=i, world_size=len(clients_data), seed=compressors_seed)
+            for i in range(len(clients_data))
+        ],
+        gamma=gamma,
+        p=p,
+        seed=seed,
+    )

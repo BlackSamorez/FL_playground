@@ -5,6 +5,7 @@ import torch
 from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
 from MiniFL.compressors import Compressor, IdentityCompressor
 from MiniFL.fn import DifferentiableFn
+from MiniFL.metrics import ClientStepMetrics, MasterStepMetrics
 
 from .interfaces import Client, Master
 
@@ -17,7 +18,7 @@ class GDClient(Client):
         data_receiver: DataReceiver,
         gamma: float,
     ):
-        self.fn = fn
+        super().__init__(fn=fn)
 
         self.data_sender = data_sender
         self.data_receiver = data_receiver
@@ -28,16 +29,24 @@ class GDClient(Client):
     def prepare(self):
         pass
 
-    def step(self) -> float:
-        loss = self.send_grad_get_loss_()
+    def step(self) -> ClientStepMetrics:
+        loss, grad_norm = self.send_grad_get_loss_()
         self.apply_global_step_()
-        return loss
 
-    def send_grad_get_loss_(self) -> float:
+        self.step_num += 1
+        return ClientStepMetrics(
+            step=self.step_num - 1,
+            value=loss,
+            total_bits_sent=self.data_sender.n_bits_passed,
+            total_bits_received=self.data_receiver.n_bits_passed,
+            grad_norm=grad_norm,
+        )
+
+    def send_grad_get_loss_(self) -> (float, float):
         flat_grad_estimate = self.fn.get_flat_grad_estimate()
         msg = self.compressor.compress(flat_grad_estimate)
         self.data_sender.send(msg)
-        return self.fn.get_value()
+        return self.fn.get_value(), torch.linalg.vector_norm(flat_grad_estimate)
 
     def apply_global_step_(self):
         msg = self.data_receiver.recv()
@@ -53,7 +62,8 @@ class GDMaster(Master):
         data_receivers: Collection[DataReceiver],
         gamma: float,
     ):
-        self.fn = fn
+        super().__init__(fn=fn)
+
         self.data_senders = data_senders
         self.data_receivers = data_receivers
         self.compressor = IdentityCompressor()
@@ -63,7 +73,7 @@ class GDMaster(Master):
     def prepare(self):
         pass
 
-    def step(self) -> float:
+    def step(self) -> MasterStepMetrics:
         aggregated_gradients = self.fn.zero_like_grad()
         for receiver in self.data_receivers:
             msg = receiver.recv()
@@ -76,8 +86,14 @@ class GDMaster(Master):
 
         self.fn.step(-aggregated_gradients * self.gamma)
 
-        with torch.no_grad():
-            return self.fn.get_value()
+        self.step_num += 1
+        return MasterStepMetrics(
+            step=self.step_num - 1,
+            value=self.fn.get_value(),
+            total_bits_sent=sum(s.n_bits_passed for s in self.data_senders),
+            total_bits_received=sum(r.n_bits_passed for r in self.data_receivers),
+            grad_norm=torch.linalg.vector_norm(aggregated_gradients),
+        )
 
 
 def get_gd_master_and_clients(

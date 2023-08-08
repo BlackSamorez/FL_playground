@@ -11,20 +11,22 @@ from .message import Message
 class DataSender:
     def __init__(self, queue: SimpleQueue) -> None:
         self.queue = queue
-        self.n_bits_passed = 0
+        self.n_bits_passed: float = 0
 
     def send(self, msg: Message):
         self.n_bits_passed += msg.size
-
         self.queue.put(msg)
 
 
 class DataReceiver:
     def __init__(self, queue: SimpleQueue) -> None:
         self.queue = queue
+        self.n_bits_passed: float = 0
 
     def recv(self) -> Message:
-        return self.queue.get()
+        msg = self.queue.get()
+        self.n_bits_passed += msg.size
+        return msg
 
 
 def get_sender_receiver() -> Tuple[DataSender, DataReceiver]:

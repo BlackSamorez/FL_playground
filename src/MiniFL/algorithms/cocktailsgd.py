@@ -6,6 +6,7 @@ from torch import FloatTensor
 from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
 from MiniFL.compressors import CocktailCompressor, Compressor
 from MiniFL.fn import DifferentiableFn
+from MiniFL.metrics import ClientStepMetrics, MasterStepMetrics
 
 from .interfaces import Client, Master
 
@@ -27,8 +28,7 @@ class CocktailGDClient(Client):
         # Hyperparameters
         gamma: float,
     ):
-        self.fn = fn
-        self.global_parameters = self.fn.get_parameters()
+        super().__init__(fn=fn)
 
         self.data_sender = data_sender
         self.data_receiver = data_receiver
@@ -37,14 +37,25 @@ class CocktailGDClient(Client):
 
         self.gamma = gamma
 
+        self.global_parameters = self.fn.get_parameters()
+
     def prepare(self):
         pass
 
     def step(self) -> float:
+        value = self.fn.get_value()
         grad_estimate = self.compute_thread_()
         compressed_delta, compressed_global_delta = self.communication_thread_()
         self.apply_updates_(grad_estimate, compressed_delta, compressed_global_delta)
-        return self.fn.get_value()
+
+        self.step_num += 1
+        return ClientStepMetrics(
+            step=self.step_num - 1,
+            value=value,
+            total_bits_sent=self.data_sender.n_bits_passed,
+            total_bits_received=self.data_receiver.n_bits_passed,
+            grad_norm=torch.linalg.vector_norm(grad_estimate),
+        )
 
     def compute_thread_(self) -> FloatTensor:
         return self.fn.get_flat_grad_estimate()
@@ -79,7 +90,7 @@ class CocktailGDMaster(Master):
         uplink_compressors: Collection[Compressor],
         downlink_compressor: Collection[Compressor],
     ):
-        self.fn = fn
+        super().__init__(fn=fn)
 
         self.data_senders = data_senders
         self.data_receivers = data_receivers
@@ -110,7 +121,14 @@ class CocktailGDMaster(Master):
         # Update global model
         self.fn.step(compressed_global_delta)
 
-        return self.fn.get_value()
+        self.step_num += 1
+        return MasterStepMetrics(
+            step=self.step_num - 1,
+            value=self.fn.get_value(),
+            total_bits_sent=sum(s.n_bits_passed for s in self.data_senders),
+            total_bits_received=sum(r.n_bits_passed for r in self.data_receivers),
+            grad_norm=torch.linalg.vector_norm(compressed_global_delta),
+        )
 
 
 def get_cocktailgd_master_and_clients(

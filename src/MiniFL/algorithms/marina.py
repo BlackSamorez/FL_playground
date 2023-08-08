@@ -5,6 +5,7 @@ import torch
 from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
 from MiniFL.compressors import Compressor, IdentityCompressor, PermKUnbiasedCompressor
 from MiniFL.fn import DifferentiableFn
+from MiniFL.metrics import ClientStepMetrics, MasterStepMetrics
 
 from .interfaces import Client, Master
 
@@ -27,7 +28,7 @@ class MarinaClient(Client):
         p: float,
         seed: int = 0,
     ):
-        self.fn = fn
+        super().__init__(fn=fn)
 
         self.data_sender = data_sender
         self.data_receiver = data_receiver
@@ -50,9 +51,18 @@ class MarinaClient(Client):
 
     def step(self) -> float:
         # Receive g^k from master and apply it
-        self.apply_global_step_()
+        grad_norm = self.apply_global_step_()
         # Construct and send g_i^{k+1}
-        return self.send_grad_get_loss_()
+        loss = self.send_grad_get_loss_()
+
+        self.step_num += 1
+        return ClientStepMetrics(
+            step=self.step_num - 1,
+            value=loss,
+            total_bits_sent=self.data_sender.n_bits_passed,
+            total_bits_received=self.data_receiver.n_bits_passed,
+            grad_norm=grad_norm,
+        )
 
     def send_grad_get_loss_(self) -> float:
         flattened_grad = self.fn.get_flat_grad_estimate()
@@ -67,10 +77,11 @@ class MarinaClient(Client):
         self.grad_prev = flattened_grad
         return self.fn.get_value()
 
-    def apply_global_step_(self):
+    def apply_global_step_(self) -> float:
         msg = self.data_receiver.recv()
         aggregated_grad_estimate = self.identity_downlink_compressor.decompress(msg)
         self.fn.step(-aggregated_grad_estimate * self.gamma)
+        return torch.linalg.vector_norm(aggregated_grad_estimate)
 
 
 class MarinaMaster(Master):
@@ -87,7 +98,7 @@ class MarinaMaster(Master):
         p: float,
         seed: int = 0,
     ):
-        self.fn = fn
+        super().__init__(fn=fn)
 
         self.data_senders = data_senders
         self.data_receivers = data_receivers
@@ -112,6 +123,7 @@ class MarinaMaster(Master):
             msg = compressor.compress(self.g_prev)
             sender.send(msg)
         self.fn.step(-self.g_prev * self.gamma)
+        grad_norm = torch.linalg.vector_norm(self.g_prev)
 
         # g_{k+1} = \sum_{i=1}^n g_i^{k+1}
         c = get_c(self.generator, self.p)
@@ -120,7 +132,14 @@ class MarinaMaster(Master):
         else:
             self.process_compressed_shifts_()
 
-        return self.fn.get_value()
+        self.step_num += 1
+        return MasterStepMetrics(
+            step=self.step_num - 1,
+            value=self.fn.get_value(),
+            total_bits_sent=sum(s.n_bits_passed for s in self.data_senders),
+            total_bits_received=sum(r.n_bits_passed for r in self.data_receivers),
+            grad_norm=grad_norm,
+        )
 
     def process_full_grads_(self):
         self.g_prev = self.fn.zero_like_grad()

@@ -7,7 +7,7 @@ from torch import FloatTensor, Tensor, nn
 
 from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
 from MiniFL.compressors import CocktailCompressor, Compressor
-from MiniFL.utils import Flattener, add_grad_dict, get_grad_dict
+from MiniFL.fn import DifferentiableFn
 
 from .interfaces import Client, Master
 
@@ -20,9 +20,7 @@ class CocktailGDClient(Client):
     def __init__(
         self,
         # Task
-        data: Tuple[Tensor, Tensor],
-        model: nn.Module,
-        loss_fn,
+        fn: DifferentiableFn,
         # Communications
         data_sender: DataSender,
         data_receiver: DataReceiver,
@@ -31,13 +29,8 @@ class CocktailGDClient(Client):
         # Hyperparameters
         gamma: float,
     ):
-        self.data = data
-        self.global_model = model
-        self.global_optimizer = torch.optim.SGD(self.global_model.parameters(), lr=1)
-        self.local_model = deepcopy(model)
-        self.local_optimizer = torch.optim.SGD(self.local_model.parameters(), lr=1)
-        self.flattener = Flattener(shapes={k: v.shape for k, v in self.local_model.named_parameters()})
-        self.loss_fn = loss_fn
+        self.fn = fn
+        self.global_parameters = self.fn.get_parameters()
 
         self.data_sender = data_sender
         self.data_receiver = data_receiver
@@ -50,22 +43,17 @@ class CocktailGDClient(Client):
         pass
 
     def step(self) -> float:
-        loss = self.compute_thread_()
+        grad_estimate = self.compute_thread_()
         compressed_delta, compressed_global_delta = self.communication_thread_()
-        self.apply_updates_(compressed_delta, compressed_global_delta)
-        return loss
+        self.apply_updates_(grad_estimate, compressed_delta, compressed_global_delta)
+        return self.fn.get_value()
 
-    def compute_thread_(self) -> float:
-        self.local_optimizer.zero_grad()
-        loss = self.loss_fn(self.local_model(self.data[0]), self.data[1]) * self.gamma
-        loss.backward()
-        return float(loss)
+    def compute_thread_(self) -> FloatTensor:
+        return self.fn.get_flat_grad_estimate()
 
     def communication_thread_(self) -> (FloatTensor, FloatTensor):
         # \delta_t^{(i)} = x_t^{(i)} - x'_{t}^{(i)}
-        delta = self.flattener.flatten(self.local_model.state_dict()) - self.flattener.flatten(
-            self.global_model.state_dict()
-        )
+        delta = self.fn.get_parameters() - self.global_parameters
 
         uplink_msg = self.uplink_compressor.compress(delta)
         self.data_sender.send(uplink_msg)
@@ -73,47 +61,34 @@ class CocktailGDClient(Client):
 
         return self.uplink_compressor.decompress(uplink_msg), self.downlink_compressor.decompress(downlink_msg)
 
-    def apply_updates_(self, compressed_delta: FloatTensor, compressed_global_delta: FloatTensor):
-        # -\gamma g_t^{(i)} is already in grad since compute_thread_
-        # add +C[\Delta_t]
-        add_grad_dict(self.local_model, grad_dict=self.flattener.unflatten(-compressed_global_delta))
-        # add -C[\delta_t^{(i)}]
-        add_grad_dict(self.local_model, grad_dict=self.flattener.unflatten(compressed_delta))
-        self.local_optimizer.step()
-
-        self.global_optimizer.zero_grad()
-        # add +C[\Delta_t]
-        add_grad_dict(self.global_model, grad_dict=self.flattener.unflatten(-compressed_global_delta))
-        self.global_optimizer.step()
+    def apply_updates_(
+        self, grad_estimate: FloatTensor, compressed_delta: FloatTensor, compressed_global_delta: FloatTensor
+    ):
+        # Set x_{t+1}^{(i)} = x_{t}^{(i)} - \gamma g_t^{(i)} + C[\Delta_t] - C[\delta_t^{(i)}]
+        self.fn.step(-grad_estimate * self.gamma + compressed_global_delta - compressed_delta)
+        # Set x'_{t+1}^{(i)} = x'_{t}^{(i)} + C[\Delta_t]
+        self.global_parameters += compressed_global_delta
 
 
 class CocktailGDMaster(Master):
     def __init__(
         self,
         # Task
-        eval_data: Tuple[Tensor, Tensor],
-        model: nn.Module,
-        loss_fn,
+        fn: DifferentiableFn,
         # Communications
         data_senders: Collection[DataSender],
         data_receivers: Collection[DataReceiver],
         uplink_compressors: Collection[Compressor],
         downlink_compressor: Collection[Compressor],
-        # Hyperparameters
-        gamma: float,
     ):
-        self.eval_data = eval_data
-        self.global_model = model
-        self.global_optimizer = torch.optim.SGD(self.global_model.parameters(), lr=gamma)
-        self.flattener = Flattener(shapes={k: v.shape for k, v in self.global_model.named_parameters()})
-        self.loss_fn = loss_fn
+        self.fn = fn
 
         self.data_senders = data_senders
         self.data_receivers = data_receivers
         self.uplink_compressors = uplink_compressors
         self.downlink_compressor = downlink_compressor
 
-        self.e = torch.zeros_like(self.flattener.flatten(self.global_model.state_dict()))
+        self.e = self.fn.zero_like_grad()
 
     def prepare(self):
         pass
@@ -135,27 +110,21 @@ class CocktailGDMaster(Master):
         self.e = global_delta - compressed_global_delta
 
         # Update global model
-        self.global_optimizer.zero_grad()
-        add_grad_dict(self.global_model, grad_dict=self.flattener.unflatten(-compressed_global_delta))
-        self.global_optimizer.step()
+        self.fn.step(compressed_global_delta)
 
-        return self.val_loss_()
-
-    def val_loss_(self) -> float:
-        with torch.no_grad():
-            return float(self.loss_fn(self.global_model(self.eval_data[0]), self.eval_data[1]))
+        return self.fn.get_value()
 
 
 def get_cocktailgd_master_and_clients(
-    model: nn.Module,
-    loss_fn,
+    master_fn: DifferentiableFn,
+    client_fns: Collection[DifferentiableFn],
     gamma: float,
     rand_p: float = 0.1,
     top_p: float = 0.2,
     bits: int = 4,
     seed: int = 0,
 ) -> Tuple[CocktailGDMaster, Collection[CocktailGDClient]]:
-    num_clients = len(clients_data)
+    num_clients = len(client_fns)
 
     uplink_comms = [get_sender_receiver() for _ in range(num_clients)]
     uplink_compressors = [
@@ -163,31 +132,25 @@ def get_cocktailgd_master_and_clients(
     ]
     downlink_compressor = CocktailCompressor(rand_p=rand_p, top_p=top_p, bits=bits, seed=seed - 1)
     downlink_comms = [get_sender_receiver() for _ in range(num_clients)]
-    client_models = [deepcopy(model) for _ in range(num_clients)]
 
     master = CocktailGDMaster(
-        eval_data=eval_data,
-        model=model,
-        loss_fn=loss_fn,
+        fn=master_fn,
         data_senders=[s for s, r in downlink_comms],
         data_receivers=[r for s, r in uplink_comms],
         uplink_compressors=uplink_compressors,
         downlink_compressor=downlink_compressor,
-        gamma=gamma,
     )
 
-    clients = []
-    for i in range(num_clients):
-        client = CocktailGDClient(
-            data=clients_data[i],
-            model=client_models[i],
-            loss_fn=loss_fn,
+    clients = [
+        CocktailGDClient(
+            fn=client_fns[i],
             data_sender=uplink_comms[i][0],
             data_receiver=downlink_comms[i][1],
             uplink_compressor=uplink_compressors[i],
             downlink_compressor=downlink_compressor,
             gamma=gamma,
         )
-        clients.append(client)
+        for i in range(num_clients)
+    ]
 
     return master, clients

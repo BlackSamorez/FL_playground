@@ -13,6 +13,10 @@ class DifferentiableFn(ABC):
         pass
 
     @abstractmethod
+    def get_parameters(self) -> FloatTensor:
+        pass
+
+    @abstractmethod
     def get_flat_grad_estimate() -> FloatTensor:
         pass
 
@@ -44,6 +48,9 @@ class NNDifferentiableFn(DifferentiableFn):
             else:
                 batch_idx = torch.randperm(self.data[1].shape[0], generator=self.generator)[: self.batch_size]
                 return float(self.loss_fn(self.model(self.data[0][batch_idx]), self.data[1][batch_idx]))
+
+    def get_parameters(self) -> FloatTensor:
+        return self.flattener.flatten(self.model.state_dict())
 
     def get_flat_grad_estimate(self) -> FloatTensor:
         self.optimizer.zero_grad()

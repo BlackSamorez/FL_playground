@@ -1,14 +1,10 @@
-from copy import deepcopy
-from queue import SimpleQueue
-from typing import Collection, Mapping, Tuple
+from typing import Collection, Tuple
 
 import torch
-from torch import Tensor, nn
 
 from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
 from MiniFL.compressors import Compressor, IdentityCompressor, PermKUnbiasedCompressor
 from MiniFL.fn import DifferentiableFn
-from MiniFL.utils import Flattener, add_grad_dict, get_grad_dict
 
 from .interfaces import Client, Master
 

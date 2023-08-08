@@ -1,9 +1,7 @@
-from copy import deepcopy
-from queue import SimpleQueue
-from typing import Collection, Mapping, Tuple
+from typing import Collection, Tuple
 
 import torch
-from torch import FloatTensor, Tensor, nn
+from torch import FloatTensor
 
 from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
 from MiniFL.compressors import CocktailCompressor, Compressor

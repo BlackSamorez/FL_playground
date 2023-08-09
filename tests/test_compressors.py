@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from MiniFL.compressors.basic import IdentityCompressor, PermKUnbiasedCompressor, RandPUnbiasedCompressor
+from MiniFL.compressors.basic import IdentityCompressor, PermKUnbiasedCompressor, RandKUnbiasedCompressor
 from MiniFL.compressors.interfaces import UnbiasedCompressor
 
 
@@ -9,7 +9,7 @@ from MiniFL.compressors.interfaces import UnbiasedCompressor
     "compressor_cls_and_kwargs",
     [
         (IdentityCompressor, {}),
-        (RandPUnbiasedCompressor, {"p": 0.5}),
+        (RandKUnbiasedCompressor, {"p": 0.5}),
         (PermKUnbiasedCompressor, {"rank": 0, "world_size": 5}),
     ],
 )

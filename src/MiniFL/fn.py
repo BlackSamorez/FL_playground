@@ -32,6 +32,10 @@ class DifferentiableFn(ABC):
     def zero_like_grad(self) -> FloatTensor:
         pass
 
+    @abstractmethod
+    def size(self) -> int:
+        pass
+
     def liptschitz_gradient_constant(self) -> float:
         raise NotImplementedError()
 
@@ -66,6 +70,9 @@ class AutogradDifferentiableFn(DifferentiableFn):
 
     def zero_like_grad(self) -> FloatTensor:
         return torch.zeros_like(self.arg_parameter.data)
+
+    def size(self) -> int:
+        return self.arg_parameter.numel()
 
 
 class NNDifferentiableFn(DifferentiableFn):
@@ -112,6 +119,9 @@ class NNDifferentiableFn(DifferentiableFn):
 
     def zero_like_grad(self) -> FloatTensor:
         return torch.zeros_like(self.get_flat_grad_estimate())
+
+    def size(self) -> int:
+        return self.get_parameters().numel()
 
 
 class LogisticRegression(NNDifferentiableFn):

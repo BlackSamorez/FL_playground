@@ -144,9 +144,12 @@ def get_cocktailgd_master_and_clients(
 
     uplink_comms = [get_sender_receiver() for _ in range(num_clients)]
     uplink_compressors = [
-        CocktailCompressor(rand_p=rand_p, top_p=top_p, bits=bits, seed=seed + i) for i in range(num_clients)
+        CocktailCompressor(size=master_fn.size(), rand_p=rand_p, top_p=top_p, bits=bits, seed=seed + i)
+        for i in range(num_clients)
     ]
-    downlink_compressor = CocktailCompressor(rand_p=rand_p, top_p=top_p, bits=bits, seed=seed - 1)
+    downlink_compressor = CocktailCompressor(
+        size=master_fn.size(), rand_p=rand_p, top_p=top_p, bits=bits, seed=seed - 1
+    )
     downlink_comms = [get_sender_receiver() for _ in range(num_clients)]
 
     master = CocktailGDMaster(

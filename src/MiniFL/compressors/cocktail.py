@@ -4,7 +4,7 @@ from torch import FloatTensor
 from MiniFL.message import Message
 from MiniFL.utils import get_num_bits
 
-from .basic import RandPBiasedCompressor, TopPBiasedCompressor
+from .basic import RandKContractiveCompressor, TopKCompressor
 from .interfaces import Compressor
 
 
@@ -66,34 +66,35 @@ def _decompress_nbits(x, scale, bits):
 
 
 class CocktailCompressor(Compressor):
-    def __init__(self, rand_p: float, top_p: float, bits, scale_method="max", seed=0):
-        self.rand_p = RandPBiasedCompressor(p=rand_p, seed=seed)
-        self.top_p = TopPBiasedCompressor(p=top_p)
+    def __init__(self, size: int, rand_p: float, top_p: float, bits, scale_method="max", seed=0):
+        super().__init__(size)
+        self.rand_k = RandKContractiveCompressor(size, p=rand_p, seed=seed)
+        self.top_k = TopKCompressor(size, p=top_p)
         self.bits = bits
         self.scale_method = scale_method
 
     def compress(self, x: FloatTensor) -> Message:
-        rand_p_msg = self.rand_p.compress(x)
-        rand_indexes, rand_values = rand_p_msg.data
-        top_p_msg = self.top_p.compress(rand_values)
-        top_indexes, top_values = top_p_msg.data
+        rand_k_msg = self.rand_k.compress(x)
+        rand_indexes, rand_values = rand_k_msg.data
+        top_k_msg = self.top_k.compress(rand_values)
+        top_indexes, top_values = top_k_msg.data
         quantized_values, scale = _compress_nbits(
             top_values, self.bits, scale_method=self.scale_method, scale_dims=(0,)
         )
 
         return Message(
             data=(rand_indexes, top_indexes, quantized_values),
-            size=top_p_msg.size - top_values.numel() * get_num_bits(top_values.dtype) + top_values.numel() * self.bits,
+            size=top_k_msg.size - top_values.numel() * get_num_bits(top_values.dtype) + top_values.numel() * self.bits,
             metadata={"rand_shape": x.shape, "top_shape": rand_values.shape, "scale": scale},
         )
 
     def decompress(self, msg: Message) -> FloatTensor:
         rand_indexes, top_indexes, quantized_values = msg.data
         top_values = _decompress_nbits(quantized_values, msg.metadata["scale"], self.bits)
-        rand_values = self.top_p.decompress(
+        rand_values = self.top_k.decompress(
             Message(data=(top_indexes, top_values), size=0, metadata={"shape": msg.metadata["top_shape"]})
         )
-        x = self.rand_p.decompress(
+        x = self.rand_k.decompress(
             Message(data=(rand_indexes, rand_values), size=0, metadata={"shape": msg.metadata["rand_shape"]})
         )
         return x

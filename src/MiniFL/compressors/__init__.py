@@ -1,9 +1,9 @@
 from .basic import (
     IdentityCompressor,
     PermKUnbiasedCompressor,
-    RandPBiasedCompressor,
-    RandPUnbiasedCompressor,
-    TopPBiasedCompressor,
+    RandKContractiveCompressor,
+    RandKUnbiasedCompressor,
+    TopKCompressor,
 )
 from .cocktail import CocktailCompressor
 from .interfaces import Compressor, UnbiasedCompressor

@@ -22,7 +22,7 @@ class GDClient(Client):
 
         self.data_sender = data_sender
         self.data_receiver = data_receiver
-        self.compressor = IdentityCompressor()
+        self.compressor = IdentityCompressor(fn.size())
 
         self.gamma = gamma
 
@@ -66,7 +66,7 @@ class GDMaster(Master):
 
         self.data_senders = data_senders
         self.data_receivers = data_receivers
-        self.compressor = IdentityCompressor()
+        self.compressor = IdentityCompressor(fn.size())
 
         self.gamma = gamma
 

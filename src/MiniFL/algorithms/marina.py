@@ -33,8 +33,8 @@ class MarinaClient(Client):
         self.data_sender = data_sender
         self.data_receiver = data_receiver
         self.uplink_compressor = uplink_compressor
-        self.identity_uplink_compressor = IdentityCompressor()
-        self.identity_downlink_compressor = IdentityCompressor()
+        self.identity_uplink_compressor = IdentityCompressor(fn.size())
+        self.identity_downlink_compressor = IdentityCompressor(fn.size())
 
         self.generator = torch.Generator()
         self.generator.manual_seed(seed)
@@ -103,8 +103,8 @@ class MarinaMaster(Master):
         self.data_senders = data_senders
         self.data_receivers = data_receivers
         self.uplink_compressors = uplink_compressors
-        self.identity_uplink_compressors = [IdentityCompressor() for _ in range(len(data_receivers))]
-        self.downlink_compressors = [IdentityCompressor() for _ in range(len(data_senders))]
+        self.identity_uplink_compressors = [IdentityCompressor(fn.size()) for _ in range(len(data_receivers))]
+        self.downlink_compressors = [IdentityCompressor(fn.size()) for _ in range(len(data_senders))]
 
         self.generator = torch.Generator()
         self.generator.manual_seed(seed)

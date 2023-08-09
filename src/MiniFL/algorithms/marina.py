@@ -123,7 +123,7 @@ class MarinaMaster(Master):
             msg = compressor.compress(self.g_prev)
             sender.send(msg)
         self.fn.step(-self.g_prev * self.gamma)
-        grad_norm = torch.linalg.vector_norm(self.g_prev)
+        grad_norm = torch.linalg.vector_norm(self.g_prev).item()
 
         # g_{k+1} = \sum_{i=1}^n g_i^{k+1}
         c = get_c(self.generator, self.p)

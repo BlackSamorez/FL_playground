@@ -1,1 +1,1 @@
-from . import algorithms, compressors, fn
+from . import algorithms, compressors, fn, tasks

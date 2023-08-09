@@ -92,7 +92,7 @@ class GDMaster(Master):
             value=self.fn.get_value(),
             total_bits_sent=sum(s.n_bits_passed for s in self.data_senders),
             total_bits_received=sum(r.n_bits_passed for r in self.data_receivers),
-            grad_norm=torch.linalg.vector_norm(aggregated_gradients),
+            grad_norm=torch.linalg.vector_norm(aggregated_gradients).item(),
         )
 
 

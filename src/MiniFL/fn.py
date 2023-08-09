@@ -9,6 +9,10 @@ from .utils import Flattener, add_grad_dict, get_grad_dict
 
 class DifferentiableFn(ABC):
     @abstractmethod
+    def is_full_grad(self) -> bool:
+        pass
+
+    @abstractmethod
     def get_value(self) -> float:
         pass
 
@@ -29,6 +33,38 @@ class DifferentiableFn(ABC):
         pass
 
 
+class AutogradDifferentiableFn(DifferentiableFn):
+    def __init__(self, fn, arg_tensor: FloatTensor):
+        self.fn = fn
+        self.arg_parameter = nn.Parameter(arg_tensor)
+        assert self.arg_parameter.requires_grad
+
+        self.optimizer = torch.optim.SGD([self.arg_parameter], lr=1)
+
+    def is_full_grad(self) -> bool:
+        return True
+
+    def get_value(self) -> float:
+        with torch.no_grad():
+            return float(self.fn(self.arg_parameter.data))
+
+    def get_parameters(self) -> FloatTensor:
+        return self.arg_parameter.data.clone().detach()
+
+    def get_flat_grad_estimate(self) -> FloatTensor:
+        self.optimizer.zero_grad()
+        self.fn(self.arg_parameter).backward()
+        return self.arg_parameter.grad.data.clone().detach()
+
+    def step(self, delta: FloatTensor):
+        self.optimizer.zero_grad()
+        self.arg_parameter.grad = -delta.clone().detach()
+        self.optimizer.step()
+
+    def zero_like_grad(self) -> FloatTensor:
+        return torch.zeros_like(self.arg_parameter.data)
+
+
 class NNDifferentiableFn(DifferentiableFn):
     def __init__(self, model: nn.Module, data: Tuple[Tensor, Tensor], loss_fn, batch_size: int, seed: int = 0):
         self.model = model
@@ -40,6 +76,9 @@ class NNDifferentiableFn(DifferentiableFn):
 
         self.generator = torch.Generator()
         self.generator.manual_seed(seed)
+
+    def is_full_grad(self) -> bool:
+        return self.batch_size == -1
 
     def get_value(self) -> float:
         with torch.no_grad():

@@ -160,11 +160,19 @@ def get_marina_master_and_clients(
     master_fn: DifferentiableFn,
     client_fns: Collection[DifferentiableFn],
     compressors: Collection[Compressor],
-    gamma: float,
     p: float,
+    gamma: float = None,
+    gamma_multiplier: float = None,
     seed: int = 0,
 ) -> Tuple[MarinaMaster, Collection[MarinaClient]]:
     num_clients = len(client_fns)
+    if gamma is None:
+        if gamma_multiplier is None:
+            raise ValueError("Either gamma or gamma_multiplier must be specified")
+        mean_square_liptschitz_gradient_constant = (
+            sum(fn.liptschitz_gradient_constant() ** 2 for fn in client_fns) / num_clients
+        ) ** (1 / 2)
+        gamma = gamma_multiplier / mean_square_liptschitz_gradient_constant
 
     uplink_comms = [get_sender_receiver() for _ in range(num_clients)]
     downlink_comms = [get_sender_receiver() for _ in range(num_clients)]
@@ -198,8 +206,9 @@ def get_marina_master_and_clients(
 def get_permk_marina_master_and_clients(
     master_fn: DifferentiableFn,
     client_fns: Collection[DifferentiableFn],
-    gamma: float,
     p: float,
+    gamma: float = None,
+    gamma_multiplier: float = None,
     compressors_seed: int = 0,
     seed: int = 0,
 ) -> Tuple[MarinaMaster, Collection[MarinaClient]]:
@@ -210,7 +219,8 @@ def get_permk_marina_master_and_clients(
             PermKUnbiasedCompressor(rank=i, world_size=len(client_fns), seed=compressors_seed)
             for i in range(len(client_fns))
         ],
-        gamma=gamma,
         p=p,
+        gamma=gamma,
+        gamma_multiplier=gamma_multiplier,
         seed=seed,
     )

@@ -21,7 +21,7 @@ class DifferentiableFn(ABC):
         pass
 
     @abstractmethod
-    def get_flat_grad_estimate() -> FloatTensor:
+    def get_flat_grad_estimate(self) -> FloatTensor:
         pass
 
     @abstractmethod
@@ -29,8 +29,11 @@ class DifferentiableFn(ABC):
         pass
 
     @abstractmethod
-    def zero_like_grad() -> FloatTensor:
+    def zero_like_grad(self) -> FloatTensor:
         pass
+
+    def liptschitz_gradient_constant(self) -> float:
+        raise NotImplementedError()
 
 
 class AutogradDifferentiableFn(DifferentiableFn):
@@ -109,3 +112,22 @@ class NNDifferentiableFn(DifferentiableFn):
 
     def zero_like_grad(self) -> FloatTensor:
         return torch.zeros_like(self.get_flat_grad_estimate())
+
+
+class LogisticRegression(NNDifferentiableFn):
+    def __init__(self, data: Tuple[Tensor, Tensor], batch_size: int, weight: FloatTensor = None, seed: int = 0):
+        if weight is None:
+            weight = torch.zeros_like(data[0][[0]])
+        model = nn.Linear(data[0].shape[1], 1, bias=False)
+        model.weight.data = weight
+
+        super().__init__(
+            model=model,
+            data=data,
+            loss_fn=nn.BCEWithLogitsLoss(),
+            batch_size=batch_size,
+            seed=seed,
+        )
+
+    def liptschitz_gradient_constant(self):
+        return self.data[0].square().sum(dim=1).max().item()

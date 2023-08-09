@@ -99,9 +99,15 @@ class GDMaster(Master):
 def get_gd_master_and_clients(
     master_fn: DifferentiableFn,
     client_fns: Collection[DifferentiableFn],
-    gamma: float,
+    gamma: float = None,
+    gamma_multiplier: float = None,
 ) -> Tuple[GDMaster, Collection[GDClient]]:
     num_clients = len(client_fns)
+    if gamma is None:
+        if gamma_multiplier is None:
+            raise ValueError("Either gamma or gamma_multiplier must be specified")
+        mean_liptschitz_gradient_constant = sum(fn.liptschitz_gradient_constant() for fn in client_fns) / num_clients
+        gamma = gamma_multiplier / mean_liptschitz_gradient_constant
 
     uplink_comms = [get_sender_receiver() for _ in range(num_clients)]
     downlink_comms = [get_sender_receiver() for _ in range(num_clients)]

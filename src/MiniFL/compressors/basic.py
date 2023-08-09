@@ -103,7 +103,7 @@ class RandKContractiveCompressor(RandKBaseCompressor, ContractiveCompressor):
         return self.k / self.size
 
 
-class PermKUnbiasedCompressor(InputVarianceCompressor):
+class PermKUnbiasedCompressor(UnbiasedCompressor, InputVarianceCompressor):
     def __init__(self, size: int, rank: int, world_size: int, seed=0):
         super().__init__(size=size)
 
@@ -135,3 +135,6 @@ class PermKUnbiasedCompressor(InputVarianceCompressor):
         else:
             a = b = 1 - (self.world_size - self.size) / (self.world_size - 1)
             return a, b
+
+    def omega(self) -> float:
+        return self.world_size - 1

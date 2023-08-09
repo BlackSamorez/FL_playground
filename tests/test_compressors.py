@@ -19,7 +19,7 @@ def test_unbiased(compressor_cls_and_kwargs):
     torch.manual_seed(0)
 
     compressor_cls, kwargs = compressor_cls_and_kwargs
-    c = compressor_cls(**kwargs)
+    c = compressor_cls(SIZE, **kwargs)
     assert isinstance(c, UnbiasedCompressor)
 
     expected_mean = torch.ones(SIZE) / 2

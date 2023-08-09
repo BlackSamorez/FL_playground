@@ -9,7 +9,7 @@ from MiniFL.utils import get_num_bits
 from .interfaces import Compressor, UnbiasedCompressor
 
 
-class IdentityCompressor(Compressor):
+class IdentityCompressor(UnbiasedCompressor):
     def __init__(self):
         pass
 

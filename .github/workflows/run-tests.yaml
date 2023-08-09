@@ -27,7 +27,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-      - name: Build tensor_parallel
+      - name: Build MiniFL
         run: |
           pip install .[dev]
       - name: Test

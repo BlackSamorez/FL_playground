@@ -1,5 +1,5 @@
+from asyncio import Queue
 from copy import deepcopy
-from queue import SimpleQueue
 from typing import Collection, Mapping, Tuple
 
 import torch
@@ -9,26 +9,26 @@ from .message import Message
 
 
 class DataSender:
-    def __init__(self, queue: SimpleQueue) -> None:
+    def __init__(self, queue: Queue) -> None:
         self.queue = queue
         self.n_bits_passed: float = 0
 
-    def send(self, msg: Message):
+    async def send(self, msg: Message):
         self.n_bits_passed += msg.size
-        self.queue.put(msg)
+        await self.queue.put(msg)
 
 
 class DataReceiver:
-    def __init__(self, queue: SimpleQueue) -> None:
+    def __init__(self, queue: Queue) -> None:
         self.queue = queue
         self.n_bits_passed: float = 0
 
-    def recv(self) -> Message:
-        msg = self.queue.get()
+    async def recv(self) -> Message:
+        msg = await self.queue.get()
         self.n_bits_passed += msg.size
         return msg
 
 
 def get_sender_receiver() -> Tuple[DataSender, DataReceiver]:
-    queue = SimpleQueue()
+    queue = Queue(maxsize=1)
     return DataSender(queue=queue), DataReceiver(queue=queue)

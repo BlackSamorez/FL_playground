@@ -29,9 +29,9 @@ class GDClient(Client):
     def prepare(self):
         pass
 
-    def step(self) -> ClientStepMetrics:
-        loss, grad_norm = self.send_grad_get_loss_()
-        self.apply_global_step_()
+    async def step(self) -> ClientStepMetrics:
+        loss, grad_norm = await self.send_grad_get_loss_()
+        await self.apply_global_step_()
 
         self.step_num += 1
         return ClientStepMetrics(
@@ -42,14 +42,14 @@ class GDClient(Client):
             grad_norm=grad_norm,
         )
 
-    def send_grad_get_loss_(self) -> (float, float):
+    async def send_grad_get_loss_(self) -> (float, float):
         flat_grad_estimate = self.fn.get_flat_grad_estimate()
         msg = self.compressor.compress(flat_grad_estimate)
-        self.data_sender.send(msg)
+        await self.data_sender.send(msg)
         return self.fn.get_value(), torch.linalg.vector_norm(flat_grad_estimate)
 
-    def apply_global_step_(self):
-        msg = self.data_receiver.recv()
+    async def apply_global_step_(self):
+        msg = await self.data_receiver.recv()
         aggregated_grad_estimate = self.compressor.decompress(msg)
         self.fn.step(-aggregated_grad_estimate * self.gamma)
 
@@ -73,16 +73,16 @@ class GDMaster(Master):
     def prepare(self):
         pass
 
-    def step(self) -> MasterStepMetrics:
+    async def step(self) -> MasterStepMetrics:
         aggregated_gradients = self.fn.zero_like_grad()
         for receiver in self.data_receivers:
-            msg = receiver.recv()
+            msg = await receiver.recv()
             aggregated_gradients += self.compressor.decompress(msg)
         aggregated_gradients /= len(self.data_receivers)
 
         for sender in self.data_senders:
             msg = self.compressor.compress(aggregated_gradients)
-            sender.send(msg)
+            await sender.send(msg)
 
         self.fn.step(-aggregated_gradients * self.gamma)
 

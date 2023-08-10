@@ -1,4 +1,4 @@
-import threading
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Collection
 
@@ -36,30 +36,26 @@ class Master(ABC):
         pass
 
 
-def run_algorithm(master: Master, clients: Collection[Client], num_steps: int):
-    def run_client_(steps: int, client: Client):
+async def run_algorithm(master: Master, clients: Collection[Client], num_steps: int):
+    async def run_client_(steps: int, client: Client):
         client.prepare()
         for _ in range(steps):
-            _ = client.step()
+            _ = await client.step()
 
-    def run_master_(steps: int, master: Master, metrics: list):
+    async def run_master_(steps: int, master: Master, metrics: list):
         master.prepare()
         for _ in trange(steps):
-            master_metrics = master.step()
+            master_metrics = await master.step()
             metrics.append(master_metrics)
 
     master_metrics = []
 
-    client_threads = []
+    loop = asyncio.get_event_loop()
+
+    tasks = []
     for i, client in enumerate(clients):
-        client_threads.append(threading.Thread(target=run_client_, args=(num_steps, client)))
-        client_threads[-1].start()
-
-    master_thread = threading.Thread(target=run_master_, args=(num_steps, master, master_metrics))
-    master_thread.start()
-
-    master_thread.join()
-    for t in client_threads:
-        t.join()
+        tasks.append(loop.create_task(run_client_(num_steps, client)))
+    tasks.append(loop.create_task(run_master_(num_steps, master, master_metrics)))
+    await asyncio.wait(tasks)
 
     return master_metrics

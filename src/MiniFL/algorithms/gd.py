@@ -1,10 +1,11 @@
 from typing import Collection, Tuple
 
 import torch
+from torch import FloatTensor
 
-from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
-from MiniFL.compressors import Compressor, IdentityCompressor
+from MiniFL.compressors import IdentityCompressor
 from MiniFL.fn import DifferentiableFn
+from MiniFL.message import Message
 from MiniFL.metrics import ClientStepMetrics, MasterStepMetrics
 
 from .interfaces import Client, Master
@@ -14,91 +15,51 @@ class GDClient(Client):
     def __init__(
         self,
         fn: DifferentiableFn,
-        data_sender: DataSender,
-        data_receiver: DataReceiver,
         gamma: float,
     ):
         super().__init__(fn=fn)
-
-        self.data_sender = data_sender
-        self.data_receiver = data_receiver
         self.compressor = IdentityCompressor(fn.size())
-
         self.gamma = gamma
 
     def prepare(self):
         pass
 
-    def step(self) -> ClientStepMetrics:
-        # Receive
-        self.apply_global_step_()
-        # Send
-        loss, grad_norm = self.send_grad_get_loss_()
-
+    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, ClientStepMetrics):
+        self.fn.step(-broadcasted_master_tensor * self.gamma)
+        grad_estimate = self.fn.get_flat_grad_estimate()
         self.step_num += 1
-        return ClientStepMetrics(
+        return self.compressor.compress(grad_estimate), ClientStepMetrics(
             step=self.step_num - 1,
-            value=loss,
-            total_bits_sent=self.data_sender.n_bits_passed,
-            total_bits_received=self.data_receiver.n_bits_passed,
-            grad_norm=grad_norm,
+            value=self.fn.get_value(),
+            grad_norm=torch.linalg.vector_norm(grad_estimate),
         )
-
-    def send_grad_get_loss_(self) -> (float, float):
-        flat_grad_estimate = self.fn.get_flat_grad_estimate()
-        msg = self.compressor.compress(flat_grad_estimate)
-        self.data_sender.send(msg)
-        return self.fn.get_value(), torch.linalg.vector_norm(flat_grad_estimate)
-
-    def apply_global_step_(self):
-        msg = self.data_receiver.recv()
-        aggregated_grad_estimate = self.compressor.decompress(msg)
-        self.fn.step(-aggregated_grad_estimate * self.gamma)
 
 
 class GDMaster(Master):
     def __init__(
         self,
         fn: DifferentiableFn,
-        data_senders: Collection[DataSender],
-        data_receivers: Collection[DataReceiver],
+        num_clients: int,
         gamma: float,
     ):
-        super().__init__(fn=fn)
-
-        self.data_senders = data_senders
-        self.data_receivers = data_receivers
-        self.compressor = IdentityCompressor(fn.size())
-
+        super().__init__(fn=fn, num_clients=num_clients)
         self.gamma = gamma
-
-        self.aggregated_gradients = fn.zero_like_grad()
+        self.compressor = IdentityCompressor(fn.size())
 
     def prepare(self):
         pass
 
-    def step(self) -> MasterStepMetrics:
-        # Send
-        for sender in self.data_senders:
-            msg = self.compressor.compress(self.aggregated_gradients)
-            sender.send(msg)
-
-        # Receive
-        self.aggregated_gradients = self.fn.zero_like_grad()
-        for receiver in self.data_receivers:
-            msg = receiver.recv()
-            self.aggregated_gradients += self.compressor.decompress(msg)
-        self.aggregated_gradients /= len(self.data_receivers)
-
-        self.fn.step(-self.aggregated_gradients * self.gamma)
+    def step(self, sum_worker_tensor: FloatTensor) -> (Message, MasterStepMetrics):
+        value = self.fn.get_value()
+        global_grad_estimate = sum_worker_tensor / self.num_clients
+        self.fn.step(-global_grad_estimate * self.gamma)
+        msg = self.compressor.compress(global_grad_estimate)
 
         self.step_num += 1
-        return MasterStepMetrics(
+        return msg, MasterStepMetrics(
             step=self.step_num - 1,
-            value=self.fn.get_value(),
-            total_bits_sent=sum(s.n_bits_passed for s in self.data_senders),
-            total_bits_received=sum(r.n_bits_passed for r in self.data_receivers),
-            grad_norm=torch.linalg.vector_norm(self.aggregated_gradients).item(),
+            value=value,
+            grad_norm=torch.linalg.vector_norm(global_grad_estimate).item(),
         )
 
 
@@ -115,21 +76,15 @@ def get_gd_master_and_clients(
         mean_liptschitz_gradient_constant = sum(fn.liptschitz_gradient_constant() for fn in client_fns) / num_clients
         gamma = gamma_multiplier / mean_liptschitz_gradient_constant
 
-    uplink_comms = [get_sender_receiver() for _ in range(num_clients)]
-    downlink_comms = [get_sender_receiver() for _ in range(num_clients)]
-
     master = GDMaster(
         fn=master_fn,
-        data_senders=[s for s, r in downlink_comms],
-        data_receivers=[r for s, r in uplink_comms],
+        num_clients=num_clients,
         gamma=gamma,
     )
 
     clients = [
         GDClient(
             fn=client_fns[i],
-            data_sender=uplink_comms[i][0],
-            data_receiver=downlink_comms[i][1],
             gamma=gamma,
         )
         for i in range(num_clients)

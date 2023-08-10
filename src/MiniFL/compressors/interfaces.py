@@ -14,10 +14,6 @@ class Compressor(ABC):
     def compress(self, x: FloatTensor) -> Message:
         pass
 
-    @abstractmethod
-    def decompress(self, msg: Message) -> FloatTensor:
-        pass
-
 
 class UnbiasedCompressor(Compressor):
     @abstractmethod

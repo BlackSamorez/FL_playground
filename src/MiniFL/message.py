@@ -1,12 +1,9 @@
-from typing import Collection
-
-from torch import Tensor
+from torch import FloatTensor
 
 FLOAT_SIZE = 32
 
 
 class Message:
-    def __init__(self, data: Collection[Tensor], size: float, metadata: dict = None):
+    def __init__(self, data: FloatTensor, size: float):
         self.data = data
         self.size = size
-        self.metadata = metadata

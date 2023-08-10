@@ -119,8 +119,9 @@ class NNDifferentiableFn(DifferentiableFn):
         self.loss_fn = loss_fn
         self.batch_size = batch_size
 
-        self.generator = torch.Generator()
-        self.generator.manual_seed(seed)
+        if self.batch_size != -1:
+            self.generator = torch.Generator()
+            self.generator.manual_seed(seed)
 
     def is_full_grad(self) -> bool:
         return self.batch_size == -1
@@ -153,7 +154,7 @@ class NNDifferentiableFn(DifferentiableFn):
         self.optimizer.step()
 
     def zero_like_grad(self) -> FloatTensor:
-        return torch.zeros_like(self.get_flat_grad_estimate())
+        return torch.zeros_like(self.get_parameters())
 
     def size(self) -> int:
         return self.get_parameters().numel()

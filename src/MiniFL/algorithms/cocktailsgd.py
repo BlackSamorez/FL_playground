@@ -3,7 +3,6 @@ from typing import Collection, Tuple
 import torch
 from torch import FloatTensor
 
-from MiniFL.communications import DataReceiver, DataSender, get_sender_receiver
 from MiniFL.compressors import CocktailCompressor, Compressor
 from MiniFL.fn import DifferentiableFn
 from MiniFL.metrics import ClientStepMetrics, MasterStepMetrics
@@ -21,8 +20,6 @@ class CocktailGDClient(Client):
         # Task
         fn: DifferentiableFn,
         # Communications
-        data_sender: DataSender,
-        data_receiver: DataReceiver,
         uplink_compressor: Compressor,
         downlink_compressor: Compressor,
         # Hyperparameters
@@ -89,15 +86,11 @@ class CocktailGDMaster(Master):
         # Task
         fn: DifferentiableFn,
         # Communications
-        data_senders: Collection[DataSender],
-        data_receivers: Collection[DataReceiver],
         uplink_compressors: Collection[Compressor],
         downlink_compressor: Collection[Compressor],
     ):
         super().__init__(fn=fn)
 
-        self.data_senders = data_senders
-        self.data_receivers = data_receivers
         self.uplink_compressors = uplink_compressors
         self.downlink_compressor = downlink_compressor
 
@@ -147,7 +140,7 @@ def get_cocktailgd_master_and_clients(
 ) -> Tuple[CocktailGDMaster, Collection[CocktailGDClient]]:
     num_clients = len(client_fns)
 
-    uplink_comms = [get_sender_receiver() for _ in range(num_clients)]
+    uplink_comms = [get_thread_sender_receiver() for _ in range(num_clients)]
     uplink_compressors = [
         CocktailCompressor(size=master_fn.size(), rand_p=rand_p, top_p=top_p, bits=bits, seed=seed + i)
         for i in range(num_clients)
@@ -155,7 +148,7 @@ def get_cocktailgd_master_and_clients(
     downlink_compressor = CocktailCompressor(
         size=master_fn.size(), rand_p=rand_p, top_p=top_p, bits=bits, seed=seed - 1
     )
-    downlink_comms = [get_sender_receiver() for _ in range(num_clients)]
+    downlink_comms = [get_thread_sender_receiver() for _ in range(num_clients)]
 
     master = CocktailGDMaster(
         fn=master_fn,

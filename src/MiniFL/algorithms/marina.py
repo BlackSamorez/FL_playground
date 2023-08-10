@@ -1,3 +1,4 @@
+import math
 from typing import Collection, Tuple
 
 import torch
@@ -212,13 +213,34 @@ def get_permk_marina_master_and_clients(
     compressors_seed: int = 0,
     seed: int = 0,
 ) -> Tuple[MarinaMaster, Collection[MarinaClient]]:
+    num_clients = len(client_fns)
+    compressors = [
+        PermKUnbiasedCompressor(master_fn.size, rank=i, world_size=len(client_fns), seed=compressors_seed)
+        for i in range(len(client_fns))
+    ]
+
+    if gamma is None:
+        if gamma_multiplier is None:
+            raise ValueError("Either gamma or gamma_multiplier must be specified")
+        liptschitz_constants = [fn.liptschitz_gradient_constant() for fn in client_fns]
+        mean_liptschitz_gradient_constant = sum(liptschitz_constants) / num_clients
+        mean_square_liptschitz_gradient_constant = (sum(l**2 for l in liptschitz_constants) / num_clients) ** (1 / 2)
+        smoothness_variance = client_fns[0].smoothness_variance(client_fns)
+        assert smoothness_variance <= mean_square_liptschitz_gradient_constant**2
+        omega = compressors[0].omega()
+        m = mean_liptschitz_gradient_constant + math.sqrt(
+            ((1 - p) / p)
+            * (
+                ((omega + 1) / num_clients - 1) * mean_square_liptschitz_gradient_constant**2
+                + smoothness_variance**2
+            )
+        )
+        gamma = gamma_multiplier / m
+
     return get_marina_master_and_clients(
         master_fn=master_fn,
         client_fns=client_fns,
-        compressors=[
-            PermKUnbiasedCompressor(rank=i, world_size=len(client_fns), seed=compressors_seed)
-            for i in range(len(client_fns))
-        ],
+        compressors=compressors,
         p=p,
         gamma=gamma,
         gamma_multiplier=gamma_multiplier,

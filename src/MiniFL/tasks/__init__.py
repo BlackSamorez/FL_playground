@@ -1,2 +1,3 @@
 from .phishing import get_phishing_fns, get_phishing_regression_fns
+from .tridiagonal_quadratic import TridiagonalQuadraticFn, create_worst_case_tridiagonal_quadratics
 from .w8a import get_w8a_fns, get_w8a_regression_fns

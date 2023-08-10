@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Tuple
+from copy import deepcopy
+from typing import Collection, Tuple
 
 import torch
 from torch import FloatTensor, Tensor, nn
@@ -38,6 +39,40 @@ class DifferentiableFn(ABC):
 
     def liptschitz_gradient_constant(self) -> float:
         raise NotImplementedError()
+
+    @staticmethod
+    def smoothness_variance(fns) -> float:
+        raise NotImplementedError()
+
+
+class MeanDifferentiableFn(DifferentiableFn):
+    def __init__(self, fns: Collection[DifferentiableFn]):
+        self.fns = deepcopy(fns)
+
+    def is_full_grad(self) -> bool:
+        return all(fn.is_full_grad() for fn in self.fns)
+
+    def get_value(self) -> float:
+        return sum(fn.get_value() for fn in self.fns) / len(self.fns)
+
+    def get_parameters(self) -> FloatTensor:
+        self.fns[0].get_parameters()
+
+    def get_flat_grad_estimate(self) -> FloatTensor:
+        return sum(fn.get_flat_grad_estimate() for fn in self.fns) / len(self.fns)
+
+    def step(self, delta: FloatTensor):
+        for fn in self.fns:
+            fn.step(delta)
+
+    def zero_like_grad(self) -> FloatTensor:
+        return self.fns[0].zero_like_grad()
+
+    def size(self) -> int:
+        return self.fns[0].size()
+
+    def liptschitz_gradient_constant(self) -> float:
+        return sum(fn.liptschitz_gradient_constant() for fn in self.fns) / len(self.fns)
 
 
 class AutogradDifferentiableFn(DifferentiableFn):

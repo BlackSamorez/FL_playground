@@ -14,11 +14,11 @@ class Client(ABC):
         self.step_num = 0
 
     @abstractmethod
-    def prepare(self):
+    async def prepare(self):
         pass
 
     @abstractmethod
-    def step(self) -> ClientStepMetrics:
+    async def step(self) -> ClientStepMetrics:
         pass
 
 
@@ -28,22 +28,22 @@ class Master(ABC):
         self.step_num = 0
 
     @abstractmethod
-    def prepare(self):
+    async def prepare(self):
         pass
 
     @abstractmethod
-    def step(self) -> MasterStepMetrics:
+    async def step(self) -> MasterStepMetrics:
         pass
 
 
 async def run_algorithm(master: Master, clients: Collection[Client], num_steps: int):
     async def run_client_(steps: int, client: Client):
-        client.prepare()
+        await client.prepare()
         for _ in range(steps):
             _ = await client.step()
 
     async def run_master_(steps: int, master: Master, metrics: list):
-        master.prepare()
+        await master.prepare()
         for _ in trange(steps):
             master_metrics = await master.step()
             metrics.append(master_metrics)

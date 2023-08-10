@@ -1,3 +1,4 @@
+import asyncio
 from typing import Collection, Tuple
 
 import torch
@@ -39,13 +40,14 @@ class CocktailGDClient(Client):
 
         self.global_parameters = self.fn.get_parameters()
 
-    def prepare(self):
+    async def prepare(self):
         pass
 
-    def step(self) -> float:
+    async def step(self) -> float:
         value = self.fn.get_value()
-        grad_estimate = self.compute_thread_()
-        compressed_delta, compressed_global_delta = self.communication_thread_()
+        grad_estimate, (compressed_delta, compressed_global_delta) = await asyncio.gather(
+            self.compute_thread_(), self.communication_thread_()
+        )
         self.apply_updates_(grad_estimate, compressed_delta, compressed_global_delta)
 
         self.step_num += 1
@@ -57,16 +59,16 @@ class CocktailGDClient(Client):
             grad_norm=torch.linalg.vector_norm(grad_estimate),
         )
 
-    def compute_thread_(self) -> FloatTensor:
+    async def compute_thread_(self) -> FloatTensor:
         return self.fn.get_flat_grad_estimate()
 
-    def communication_thread_(self) -> (FloatTensor, FloatTensor):
+    async def communication_thread_(self) -> (FloatTensor, FloatTensor):
         # \delta_t^{(i)} = x_t^{(i)} - x'_{t}^{(i)}
         delta = self.fn.get_parameters() - self.global_parameters
 
         uplink_msg = self.uplink_compressor.compress(delta)
-        self.data_sender.send(uplink_msg)
-        downlink_msg = self.data_receiver.recv()
+        await self.data_sender.send(uplink_msg)
+        downlink_msg = await self.data_receiver.recv()
 
         return self.uplink_compressor.decompress(uplink_msg), self.downlink_compressor.decompress(downlink_msg)
 
@@ -99,20 +101,20 @@ class CocktailGDMaster(Master):
 
         self.e = self.fn.zero_like_grad()
 
-    def prepare(self):
+    async def prepare(self):
         pass
 
-    def step(self) -> float:
+    async def step(self) -> float:
         # Aggregate compressed \delta_t^{(i)} from all workers
         global_delta = self.e.clone().detach()
         for reciever, compressor in zip(self.data_receivers, self.uplink_compressors):
-            msg = reciever.recv()
+            msg = await reciever.recv()
             global_delta += compressor.decompress(msg) / len(self.data_senders)
 
         # Broadcast compressed Delta_t to all workers
         msg = self.downlink_compressor.compress(global_delta)
         for sender in self.data_senders:
-            sender.send(msg)
+            await sender.send(msg)
 
         # Update e_{t+1}
         compressed_global_delta = self.downlink_compressor.decompress(msg)

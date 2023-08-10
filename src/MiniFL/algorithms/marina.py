@@ -44,17 +44,17 @@ class MarinaClient(Client):
 
         self.grad_prev = None
 
-    def prepare(self):
+    async def prepare(self):
         # Init \nabla f_i(x^0)
         self.grad_prev = self.fn.get_flat_grad_estimate()
         # And send it to master
-        self.data_sender.send(self.identity_uplink_compressor.compress(self.grad_prev))
+        await self.data_sender.send(self.identity_uplink_compressor.compress(self.grad_prev))
 
-    def step(self) -> float:
+    async def step(self) -> float:
         # Receive g^k from master and apply it
-        grad_norm = self.apply_global_step_()
+        grad_norm = await self.apply_global_step_()
         # Construct and send g_i^{k+1}
-        loss = self.send_grad_get_loss_()
+        loss = await self.send_grad_get_loss_()
 
         self.step_num += 1
         return ClientStepMetrics(
@@ -65,7 +65,7 @@ class MarinaClient(Client):
             grad_norm=grad_norm,
         )
 
-    def send_grad_get_loss_(self) -> float:
+    async def send_grad_get_loss_(self) -> float:
         flattened_grad = self.fn.get_flat_grad_estimate()
 
         c = get_c(self.generator, self.p)
@@ -73,13 +73,13 @@ class MarinaClient(Client):
             msg = self.identity_uplink_compressor.compress(flattened_grad)
         else:
             msg = self.uplink_compressor.compress(flattened_grad - self.grad_prev)
-        self.data_sender.send(msg)
+        await self.data_sender.send(msg)
 
         self.grad_prev = flattened_grad
         return self.fn.get_value()
 
-    def apply_global_step_(self) -> float:
-        msg = self.data_receiver.recv()
+    async def apply_global_step_(self) -> float:
+        msg = await self.data_receiver.recv()
         aggregated_grad_estimate = self.identity_downlink_compressor.decompress(msg)
         self.fn.step(-aggregated_grad_estimate * self.gamma)
         return torch.linalg.vector_norm(aggregated_grad_estimate)
@@ -114,24 +114,24 @@ class MarinaMaster(Master):
 
         self.g_prev = self.fn.zero_like_grad()
 
-    def prepare(self):
+    async def prepare(self):
         # Initialize g_0
-        self.process_full_grads_()
+        await self.process_full_grads_()
 
-    def step(self) -> float:
+    async def step(self) -> float:
         # Broadcast g_t to all workers
         for sender, compressor in zip(self.data_senders, self.downlink_compressors):
             msg = compressor.compress(self.g_prev)
-            sender.send(msg)
+            await sender.send(msg)
         self.fn.step(-self.g_prev * self.gamma)
         grad_norm = torch.linalg.vector_norm(self.g_prev).item()
 
         # g_{k+1} = \sum_{i=1}^n g_i^{k+1}
         c = get_c(self.generator, self.p)
         if c:
-            self.process_full_grads_()
+            await self.process_full_grads_()
         else:
-            self.process_compressed_shifts_()
+            await self.process_compressed_shifts_()
 
         self.step_num += 1
         return MasterStepMetrics(
@@ -142,17 +142,17 @@ class MarinaMaster(Master):
             grad_norm=grad_norm,
         )
 
-    def process_full_grads_(self):
+    async def process_full_grads_(self):
         self.g_prev = self.fn.zero_like_grad()
         for reciever, compressor in zip(self.data_receivers, self.identity_uplink_compressors):
-            msg = reciever.recv()
+            msg = await reciever.recv()
             self.g_prev += compressor.decompress(msg)
         self.g_prev /= len(self.data_senders)
 
-    def process_compressed_shifts_(self):
+    async def process_compressed_shifts_(self):
         self.g_prev *= len(self.data_senders)
         for receiver, compressor in zip(self.data_receivers, self.uplink_compressors):
-            msg = receiver.recv()
+            msg = await receiver.recv()
             self.g_prev += compressor.decompress(msg)
         self.g_prev /= len(self.data_senders)
 

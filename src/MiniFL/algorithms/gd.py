@@ -26,7 +26,7 @@ class GDClient(Client):
 
         self.gamma = gamma
 
-    def prepare(self):
+    async def prepare(self):
         pass
 
     async def step(self) -> ClientStepMetrics:
@@ -70,7 +70,7 @@ class GDMaster(Master):
 
         self.gamma = gamma
 
-    def prepare(self):
+    async def prepare(self):
         pass
 
     async def step(self) -> MasterStepMetrics:

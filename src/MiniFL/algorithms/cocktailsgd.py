@@ -43,9 +43,13 @@ class CocktailGDClient(Client):
         pass
 
     def step(self) -> float:
+        # This is formally from last step
+        compressed_global_delta = self.recv_global_delta_()
+
         value = self.fn.get_value()
         grad_estimate = self.compute_thread_()
-        compressed_delta, compressed_global_delta = self.communication_thread_()
+        compressed_delta = self.send_local_delta_()
+
         self.apply_updates_(grad_estimate, compressed_delta, compressed_global_delta)
 
         self.step_num += 1
@@ -60,15 +64,15 @@ class CocktailGDClient(Client):
     def compute_thread_(self) -> FloatTensor:
         return self.fn.get_flat_grad_estimate()
 
-    def communication_thread_(self) -> (FloatTensor, FloatTensor):
+    def recv_global_delta_(self) -> FloatTensor:
+        return self.downlink_compressor.decompress(self.data_receiver.recv())
+
+    def send_local_delta_(self) -> FloatTensor:
         # \delta_t^{(i)} = x_t^{(i)} - x'_{t}^{(i)}
         delta = self.fn.get_parameters() - self.global_parameters
-
         uplink_msg = self.uplink_compressor.compress(delta)
         self.data_sender.send(uplink_msg)
-        downlink_msg = self.data_receiver.recv()
-
-        return self.uplink_compressor.decompress(uplink_msg), self.downlink_compressor.decompress(downlink_msg)
+        return self.uplink_compressor.decompress(uplink_msg)
 
     def apply_updates_(
         self, grad_estimate: FloatTensor, compressed_delta: FloatTensor, compressed_global_delta: FloatTensor
@@ -98,28 +102,29 @@ class CocktailGDMaster(Master):
         self.downlink_compressor = downlink_compressor
 
         self.e = self.fn.zero_like_grad()
+        self.global_delta = self.fn.zero_like_grad()
 
     def prepare(self):
         pass
 
     def step(self) -> float:
-        # Aggregate compressed \delta_t^{(i)} from all workers
-        global_delta = self.e.clone().detach()
-        for reciever, compressor in zip(self.data_receivers, self.uplink_compressors):
-            msg = reciever.recv()
-            global_delta += compressor.decompress(msg) / len(self.data_senders)
-
         # Broadcast compressed Delta_t to all workers
-        msg = self.downlink_compressor.compress(global_delta)
+        msg = self.downlink_compressor.compress(self.global_delta)
         for sender in self.data_senders:
             sender.send(msg)
 
         # Update e_{t+1}
         compressed_global_delta = self.downlink_compressor.decompress(msg)
-        self.e = global_delta - compressed_global_delta
+        self.e = self.global_delta - compressed_global_delta
 
         # Update global model
         self.fn.step(compressed_global_delta)
+
+        # Aggregate compressed \delta_t^{(i)} from all workers
+        self.global_delta = self.e.clone().detach()
+        for reciever, compressor in zip(self.data_receivers, self.uplink_compressors):
+            msg = reciever.recv()
+            self.global_delta += compressor.decompress(msg) / len(self.data_senders)
 
         self.step_num += 1
         return MasterStepMetrics(

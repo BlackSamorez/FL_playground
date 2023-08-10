@@ -30,8 +30,10 @@ class GDClient(Client):
         pass
 
     def step(self) -> ClientStepMetrics:
-        loss, grad_norm = self.send_grad_get_loss_()
+        # Receive
         self.apply_global_step_()
+        # Send
+        loss, grad_norm = self.send_grad_get_loss_()
 
         self.step_num += 1
         return ClientStepMetrics(
@@ -70,21 +72,25 @@ class GDMaster(Master):
 
         self.gamma = gamma
 
+        self.aggregated_gradients = fn.zero_like_grad()
+
     def prepare(self):
         pass
 
     def step(self) -> MasterStepMetrics:
-        aggregated_gradients = self.fn.zero_like_grad()
-        for receiver in self.data_receivers:
-            msg = receiver.recv()
-            aggregated_gradients += self.compressor.decompress(msg)
-        aggregated_gradients /= len(self.data_receivers)
-
+        # Send
         for sender in self.data_senders:
-            msg = self.compressor.compress(aggregated_gradients)
+            msg = self.compressor.compress(self.aggregated_gradients)
             sender.send(msg)
 
-        self.fn.step(-aggregated_gradients * self.gamma)
+        # Receive
+        self.aggregated_gradients = self.fn.zero_like_grad()
+        for receiver in self.data_receivers:
+            msg = receiver.recv()
+            self.aggregated_gradients += self.compressor.decompress(msg)
+        self.aggregated_gradients /= len(self.data_receivers)
+
+        self.fn.step(-self.aggregated_gradients * self.gamma)
 
         self.step_num += 1
         return MasterStepMetrics(
@@ -92,7 +98,7 @@ class GDMaster(Master):
             value=self.fn.get_value(),
             total_bits_sent=sum(s.n_bits_passed for s in self.data_senders),
             total_bits_received=sum(r.n_bits_passed for r in self.data_receivers),
-            grad_norm=torch.linalg.vector_norm(aggregated_gradients).item(),
+            grad_norm=torch.linalg.vector_norm(self.aggregated_gradients).item(),
         )
 
 

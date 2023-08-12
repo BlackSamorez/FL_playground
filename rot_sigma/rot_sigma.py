@@ -6,33 +6,15 @@ import scipy.integrate as integrate
 from base import Transform, CompressionPipeline, flatten
 from hadamard import RandomizedHadamard, padToPowerOf2
 from quantization_constants import QuantizationType, get_all_quantization_constants_tensors
-from random_p import RandomP, TopP
-
-
-ONE_BIT_SIGMA_LLOYD = {
-    0: 0.79788,
-    1: 1.52514,
-    2: 2.37322,
-    3: 3.2831,
-    4: 4.22561,
-    5: 5.1865,
-    6: 6.15848,
-    7: 7.13755,
-    8: 8.12137,
-    9: 9.10852,
-    10: 10.0981,
-}
 
 
 def solve_lloyd_(left, n, steps=1000):
-    if n == 1 and isinstance(left, int):
-        return [0, ONE_BIT_SIGMA_LLOYD[left]], [0, left, float("inf")]
     boundaries = [left] + [left + i for i in range(1,n)] + [float("inf")]
     for i in range(steps):
         centers_of_mass = [integrate.quad(lambda x: x * math.exp(-x**2 / 2 + a**2/2), a, b)[0] / integrate.quad(lambda x: math.exp(-x**2 / 2 + a**2/2), a, b)[0] for a,b in zip(boundaries[:-1], boundaries[1:])]
         boundaries = [left] + [(a + b) / 2 for a, b in zip(centers_of_mass[:-1], centers_of_mass[1:])] + [float("inf")]
 
-    return [0] + centers_of_mass, [0] + boundaries
+    return [0] + centers_of_mass, boundaries
         
 
 class SigmaQuantization(Transform):
@@ -40,24 +22,19 @@ class SigmaQuantization(Transform):
         self.sigmas = sigmas
         self.bits = bits
 
-        if self.bits == 1 and not isinstance(self.sigmas, int):
-            self.center_of_mass = integrate.quad(lambda x: x * math.exp(-x**2 / 2), sigmas, math.inf)[0] / integrate.quad(lambda x: math.exp(-x**2 / 2), sigmas, math.inf)[0]
-        else:
-            centers_of_mass, boundaries = solve_lloyd_(sigmas, 2**bits//2)
-            self.centers_of_mass = torch.tensor(centers_of_mass, device=device)
-            self.boundaries = torch.tensor(boundaries, device=device)
+        centers_of_mass, boundaries = solve_lloyd_(sigmas, 2**bits//2)
+        self.centers_of_mass = torch.tensor(centers_of_mass, device=device)
+        self.boundaries = torch.tensor(boundaries, device=device)
 
 
     def forward(self, x):
-        result = torch.zeros_like(x)
-        if self.bits == 1 and not isinstance(self.sigmas, int):
-            result[x > self.sigmas] = self.center_of_mass
-            result[x < -self.sigmas] = -self.center_of_mass
-        else:
-            ids = torch.bucketize(x.abs(), self.boundaries, right=False) - 1
-            quantized_absolute_values = torch.take(self.centers_of_mass, ids)
-            result = quantized_absolute_values * torch.sign(x)
-
+        d = x.numel()
+        scale = math.sqrt(d) / l2(x)
+        normalized_x = x * scale
+        ids = torch.bucketize(normalized_x.abs(), self.boundaries, right=False)
+        quantized_absolute_values = torch.take(self.centers_of_mass, ids)
+        result = quantized_absolute_values * torch.sign(x)
+        result /= scale
         return result, None
 
     def backward(self, x, context):
@@ -90,7 +67,40 @@ def l2(x):
     return torch.sqrt(sum_squares(x))
 
 
-def rot_sigma_builder(sigmas: float, bits: int, device="cpu"):
+class BiasedRandomP(Transform):
+  """
+  Random Sparsification given a parameter p remaining to determine the
+  probability of a coordinate to keep
+  """
+
+  def __init__(self, p=0.5, device='cpu'):
+    self.prng = torch.Generator(device=device)
+    self.p = p
+
+  def forward(self, x):
+    seed = self.prng.seed()
+    original_shape = x.shape
+    original_d = x.numel()
+    mask = torch.empty_like(x).bernoulli_(p=self.p, generator=self.prng)
+
+    indices = torch.nonzero(mask, as_tuple=True)
+    return x[indices], (seed, original_shape, original_d)
+
+  def backward(self, sparse_x, context):
+    seed, original_shape, original_d = context
+
+    x = torch.zeros(original_d, dtype=sparse_x.dtype, layout=sparse_x.layout,
+                    device=sparse_x.device)
+
+    indices = torch.nonzero(
+      torch.empty_like(x).bernoulli_(p=self.p, generator=self.prng.manual_seed(seed))
+    ).squeeze()
+    x.scatter_(0, indices, sparse_x)
+
+    return x.view(original_shape), len(indices)
+
+
+def rot_sigma_builder(p:float, sigmas: float, bits: int, device="cpu"):
     """
 
     Args:
@@ -101,8 +111,9 @@ def rot_sigma_builder(sigmas: float, bits: int, device="cpu"):
     Returns:
       EDEN compression scheme instance
     """
-    transforms = [flatten]
-    transforms += [
+    transforms = [
+        flatten,
+        BiasedRandomP(p,device),
         padToPowerOf2,
         RandomizedHadamard(device),
         SigmaQuantization(sigmas, bits, device),

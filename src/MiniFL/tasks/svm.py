@@ -7,9 +7,6 @@ from sklearn.datasets import load_svmlight_file
 
 from MiniFL.fn import DifferentiableFn, LogisticRegression, NNDifferentiableFn
 
-W8A_NUM_FEATURES = 300
-W8A_NUM_DATAPOINTS = 49749
-
 
 def get_data_(
     data_path: os.PathLike, num_clients: int

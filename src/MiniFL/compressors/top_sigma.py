@@ -57,7 +57,7 @@ class TopSigmaCompressor(ContractiveCompressor):
         )
 
     def count_bits(self, compression_result) -> float:
-        nonzero = (compression_result["assignments"] != 0).sum()
+        nonzero = (compression_result["assignments"] != 0).sum().item()
         size = compression_result["quantized_size"]
 
         return (

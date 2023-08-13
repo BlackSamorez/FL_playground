@@ -1,12 +1,13 @@
 import math
 from abc import abstractmethod
-from functools import lru_cache
+from functools import cache, lru_cache
 from typing import Literal
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.linalg import inv
+from scipy.special import erf
 from scipy.stats import ortho_group
 from torch import FloatTensor
 
@@ -186,7 +187,20 @@ class EdenUnbiasedCompressor(EdenBaseCompressor, UnbiasedCompressor):
         return scale
 
     def omega(self) -> float:
-        return torch.pi / (2 * self.p * self.bits) - 1
+        if self.p < 1:
+            return torch.pi / (2 * self.p * self.bits) - 1
+        vars = bits_var()
+        if self.fractional_bits:
+            (
+                1
+                / (
+                    (self.bits_high - self.bits) * (1 - vars[self.bits_low])
+                    + (self.bits - self.bits_low) * (1 - vars[self.bits_high])
+                )
+                - 1
+            )
+        else:
+            return 1 / (1 - vars[self.bits]) - 1
 
 
 class EdenContractiveCompressor(EdenBaseCompressor, ContractiveCompressor):
@@ -194,7 +208,17 @@ class EdenContractiveCompressor(EdenBaseCompressor, ContractiveCompressor):
         return l2(x) / math.sqrt(x.numel())
 
     def alpha(self) -> float:
-        raise NotImplementedError("TODO: implement alpha for EdenContractiveCompressor")
+        vars = bits_var()
+        if self.p < 1:
+            return 1 - (1 - self.bits) * vars[0] - (self.bits - 0) * vars[1]
+        if self.fractional_bits:
+            return (
+                1
+                - (self.bits_high - self.bits) * vars[self.bits_low]
+                - (self.bits - self.bits_low) * vars[self.bits_high]
+            )
+        else:
+            return 1 - vars[self.bits]
 
 
 ### Hadamard
@@ -603,3 +627,29 @@ def sum_squares(x):
 
 def l2(x):
     return torch.sqrt(sum_squares(x))
+
+
+def section_variance(a, b, c) -> float:
+    if math.isinf(c):
+        return (
+            np.sqrt(2 / np.pi) * np.exp(-(a**2) / 2) * (a - 2 * b)
+            - (b**2 + 1) * erf(a / np.sqrt(2))
+            + (b**2 + 1) * erf(c / np.sqrt(2))
+        )
+    else:
+        return (
+            np.sqrt(2 / np.pi) * np.exp(-(a**2) / 2) * (a - 2 * b)
+            - (b**2 + 1) * erf(a / np.sqrt(2))
+            + (b**2 + 1) * erf(c / np.sqrt(2))
+            + np.sqrt(2 / np.pi) * np.exp(-(c**2) / 2) * (2 * b - c)
+        )
+
+
+@cache
+def bits_var():
+    result = {0: 1}
+    for bits, centers in opt_hn_centroids.items():
+        borders = [0] + [(a + b) / 2 for a, b in zip(centers[:-1], centers[1:])] + [float("inf")]
+        variance = sum(section_variance(a, b, c) for a, b, c in zip(borders[:-1], centers, borders[1:]))
+        result[bits] = variance
+    return result

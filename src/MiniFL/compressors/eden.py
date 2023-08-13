@@ -3,8 +3,11 @@ from abc import abstractmethod
 from functools import lru_cache
 from typing import Literal
 
+import numpy as np
 import torch
 import torch.nn.functional as F
+from scipy.linalg import inv
+from scipy.stats import ortho_group
 from torch import FloatTensor
 
 from MiniFL.message import Message
@@ -16,7 +19,9 @@ QuantizationType = Literal["max_lloyd", "ee"]
 
 
 class EdenBaseCompressor(Compressor):
-    def __init__(self, size: int, bits: float, q_type: QuantizationType = "max_lloyd", device="cpu", seed=0):
+    def __init__(
+        self, size: int, bits: float, real_rotation=False, q_type: QuantizationType = "max_lloyd", device="cpu", seed=0
+    ):
         self.bits = bits
 
         # Sparcification
@@ -29,6 +34,9 @@ class EdenBaseCompressor(Compressor):
 
         self.generator = torch.Generator()
         self.generator.manual_seed(seed)
+
+        # Rotation
+        self.real_rotation = real_rotation
 
         # Quantization
         self.centroids, self.boundaries = get_all_quantization_constants_tensors(q_type, device)
@@ -47,36 +55,51 @@ class EdenBaseCompressor(Compressor):
 
     def compress(self, x: FloatTensor) -> Message:
         compression_result = self.inner_compress(x)
+        if self.fractional_bits:
+            bits = (
+                compression_result["assignments"][0].numel() * self.bits_low
+                + compression_result["assignments"][1].numel() * self.bits_high
+                + 32
+            )
+        else:
+            bits = compression_result["assignments"].numel() * self.bits + 32
         return Message(
             data=self.inner_decompress(compression_result),
-            size=self.p * self.bits * x.numel(),
+            size=bits,
         )
 
     def inner_compress(self, x: FloatTensor):
-        compression_result = []
+        compression_result = {}
 
         # Flatten
         original_shape = x.shape
-        compression_result.append(original_shape)
+        compression_result["original_shape"] = original_shape
         data = x.flatten()
 
         # Sparcify
         if self.p < 1:
             random_indexes, data, flattened_shape = self.random_k.inner_compress(x=data)
-            compression_result.append(flattened_shape)
-            compression_result.append(random_indexes)
-
-        # Pad
-        unpadded_size = data.numel()
-        compression_result.append(unpadded_size)
-        if unpadded_size & (unpadded_size - 1) != 0:
-            dim_with_pad = 2 ** (math.floor(math.log2(unpadded_size)) + 1)
-            data = F.pad(data, (0, dim_with_pad - unpadded_size))
+            compression_result["flattened_shape"] = flattened_shape
+            compression_result["random_indexes"] = random_indexes
 
         # Rotate
-        rotation_seed = self.generator.seed()
-        compression_result.append(rotation_seed)
-        data = randomized_hadamard_transform_(data, self.generator)
+        if self.real_rotation:
+            pre_rotation_size = data.shape[0]
+            compression_result["pre_rotation_size"] = pre_rotation_size
+            rotation_seed = self.generator.seed() % 2**32
+            compression_result["rotation_seed"] = rotation_seed
+            np.random.seed(seed=rotation_seed)
+            data = torch.from_numpy(ortho_group.rvs(pre_rotation_size) @ data.numpy()).to(data.device).to(data.dtype)
+        else:
+            unpadded_size = data.numel()
+            compression_result["unpadded_size"] = unpadded_size
+            if unpadded_size & (unpadded_size - 1) != 0:
+                dim_with_pad = 2 ** (math.floor(math.log2(unpadded_size)) + 1)
+                data = F.pad(data, (0, dim_with_pad - unpadded_size))
+
+            rotation_seed = self.generator.seed()
+            compression_result["rotation_seed"] = rotation_seed
+            data = randomized_hadamard_transform_(data, self.generator)
 
         # Quantize
         d = data.numel()
@@ -84,9 +107,9 @@ class EdenBaseCompressor(Compressor):
 
         if self.fractional_bits:
             unquantized_shape = data.shape
-            compression_result.append(unquantized_shape)
+            compression_result["unquantized_shape"] = unquantized_shape
             quantization_seed = self.generator.seed()
-            compression_result.append(quantization_seed)
+            compression_result["quantization_seed"] = quantization_seed
             mask = bernoulli_mask(data.shape, data.device, self.bits_frac, self.generator)
 
             data_low, data_high = mask_split(normalized_data, mask)
@@ -105,17 +128,17 @@ class EdenBaseCompressor(Compressor):
             unscaled_centers_vec = torch.take(self.centroids[self.bits], assignments)
 
         scale = self.get_scale(data, unscaled_centers_vec)
-        compression_result.append(scale)
-        compression_result.append(assignments)
+        compression_result["scale"] = scale
+        compression_result["assignments"] = assignments
         return compression_result
 
     def inner_decompress(self, compression_result) -> FloatTensor:
         # Dequantize
-        assignments = compression_result.pop()
-        scale = compression_result.pop()
+        assignments = compression_result["assignments"]
+        scale = compression_result["scale"]
         if self.fractional_bits:
-            quantization_seed = compression_result.pop()
-            unquantized_shape = compression_result.pop()
+            quantization_seed = compression_result["quantization_seed"]
+            unquantized_shape = compression_result["unquantized_shape"]
             assignments_low, assignments_high = assignments
 
             unscaled_centers_vec_low = torch.take(self.centroids[self.bits_low], assignments_low)
@@ -130,21 +153,26 @@ class EdenBaseCompressor(Compressor):
         data = scale * unscaled_centers_vec
 
         # Rotate back
-        rotation_seed = compression_result.pop()
-        data = inverse_randomized_hadamard_transform_(data, self.generator.manual_seed(rotation_seed))
+        if self.real_rotation:
+            rotation_seed = compression_result["rotation_seed"]
+            pre_rotation_size = compression_result["pre_rotation_size"]
+            np.random.seed(seed=rotation_seed)
+            data = torch.from_numpy(inv(ortho_group.rvs(pre_rotation_size)) @ data.numpy()).to(data.device)
+        else:
+            rotation_seed = compression_result["rotation_seed"]
+            data = inverse_randomized_hadamard_transform_(data, self.generator.manual_seed(rotation_seed))
 
-        # Unpad
-        unpadded_size = compression_result.pop()
-        data = data[:unpadded_size]
+            unpadded_size = compression_result["unpadded_size"]
+            data = data[:unpadded_size]
 
         # Unsparsify
         if self.p < 1:
-            random_indexes = compression_result.pop()
-            flattened_shape = compression_result.pop()
+            random_indexes = compression_result["random_indexes"]
+            flattened_shape = compression_result["flattened_shape"]
             data = self.random_k.inner_decompress(random_indexes, data, flattened_shape)
 
         # Unflatten
-        original_shape = compression_result.pop()
+        original_shape = compression_result["original_shape"]
         x = data.view(original_shape)
 
         return x
@@ -169,7 +197,7 @@ class EdenContractiveCompressor(EdenBaseCompressor, ContractiveCompressor):
         raise NotImplementedError("TODO: implement alpha for EdenContractiveCompressor")
 
 
-### Rotation
+### Hadamard
 
 
 def hadamard_transform_(vec):

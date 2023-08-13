@@ -66,15 +66,19 @@ class RandKBaseCompressor(Compressor):
         self.generator.manual_seed(seed)
 
     def compress(self, x: FloatTensor) -> Message:
-        indexes = torch.randperm(x.numel(), generator=self.generator)[: self.k]
-        values = x[indexes]
-
+        indexes, values, shape = self.inner_compress(x=x)
         return Message(
-            data=self.__decompress(indexes, values, x.shape),
+            data=self.inner_decompress(indexes, values, x.shape),
             size=self.k * get_num_bits(values.dtype),
         )
 
-    def __decompress(self, indexes, values, shape) -> FloatTensor:
+    def inner_compress(self, x: FloatTensor) -> (Tensor, FloatTensor, torch.Size):
+        indexes = torch.randperm(x.numel(), generator=self.generator)[: self.k]
+        values = x[indexes]
+
+        return indexes, values, x.shape
+
+    def inner_decompress(self, indexes, values, shape) -> FloatTensor:
         x = torch.zeros(shape, dtype=values.dtype, device=values.device)
         x[indexes] = values
         return x

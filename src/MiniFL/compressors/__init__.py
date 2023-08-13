@@ -6,4 +6,5 @@ from .basic import (
     TopKCompressor,
 )
 from .cocktail import CocktailCompressor
+from .eden import EdenContractiveCompressor, EdenUnbiasedCompressor
 from .interfaces import Compressor, UnbiasedCompressor

@@ -77,12 +77,6 @@ class EdenBaseCompressor(Compressor):
         compression_result["original_shape"] = original_shape
         data = x.flatten()
 
-        # Sparcify
-        if self.p < 1:
-            random_indexes, data, flattened_shape = self.random_k.inner_compress(x=data)
-            compression_result["flattened_shape"] = flattened_shape
-            compression_result["random_indexes"] = random_indexes
-
         # Rotate
         if self.real_rotation:
             pre_rotation_size = data.shape[0]
@@ -101,6 +95,12 @@ class EdenBaseCompressor(Compressor):
             rotation_seed = self.generator.seed()
             compression_result["rotation_seed"] = rotation_seed
             data = randomized_hadamard_transform_(data, self.generator)
+
+        # Sparcify
+        if self.p < 1:
+            random_indexes, data, flattened_shape = self.random_k.inner_compress(x=data)
+            compression_result["flattened_shape"] = flattened_shape
+            compression_result["random_indexes"] = random_indexes
 
         # Quantize
         d = data.numel()
@@ -153,6 +153,12 @@ class EdenBaseCompressor(Compressor):
             unscaled_centers_vec = torch.take(self.centroids[self.bits], assignments)
         data = scale * unscaled_centers_vec
 
+        # Unsparsify
+        if self.p < 1:
+            random_indexes = compression_result["random_indexes"]
+            flattened_shape = compression_result["flattened_shape"]
+            data = self.random_k.inner_decompress(random_indexes, data, flattened_shape)
+
         # Rotate back
         if self.real_rotation:
             rotation_seed = compression_result["rotation_seed"]
@@ -165,12 +171,6 @@ class EdenBaseCompressor(Compressor):
 
             unpadded_size = compression_result["unpadded_size"]
             data = data[:unpadded_size]
-
-        # Unsparsify
-        if self.p < 1:
-            random_indexes = compression_result["random_indexes"]
-            flattened_shape = compression_result["flattened_shape"]
-            data = self.random_k.inner_decompress(random_indexes, data, flattened_shape)
 
         # Unflatten
         original_shape = compression_result["original_shape"]

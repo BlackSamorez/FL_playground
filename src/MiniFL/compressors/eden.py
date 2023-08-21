@@ -56,7 +56,9 @@ class EdenBaseCompressor(Compressor):
 
     def compress(self, x: FloatTensor) -> Message:
         compression_result = self.inner_compress(x)
-        if self.fractional_bits:
+        if compression_result["is_zero"]:
+            bits = 32
+        elif self.fractional_bits:
             bits = (
                 compression_result["assignments"][0].numel() * self.bits_low
                 + compression_result["assignments"][1].numel() * self.bits_high
@@ -71,6 +73,12 @@ class EdenBaseCompressor(Compressor):
 
     def inner_compress(self, x: FloatTensor):
         compression_result = {}
+        if torch.count_nonzero(x) == 0:
+            compression_result["is_zero"] = True
+            compression_result["original_shape"] = x.shape
+            return compression_result
+        else:
+            compression_result["is_zero"] = False
 
         # Flatten
         original_shape = x.shape
@@ -134,6 +142,9 @@ class EdenBaseCompressor(Compressor):
         return compression_result
 
     def inner_decompress(self, compression_result) -> FloatTensor:
+        if compression_result["is_zero"]:
+            return torch.zeros(compression_result["original_shape"], dtype=torch.float32)
+
         # Dequantize
         assignments = compression_result["assignments"]
         scale = compression_result["scale"]

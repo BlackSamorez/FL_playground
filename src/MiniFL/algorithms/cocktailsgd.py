@@ -36,9 +36,6 @@ class CocktailGDClient(Client):
 
         self.global_parameters = self.fn.get_parameters()
 
-    def prepare(self):
-        pass
-
     def step(self) -> float:
         # This is formally from last step
         compressed_global_delta = self.recv_global_delta_()
@@ -96,9 +93,6 @@ class CocktailGDMaster(Master):
 
         self.e = self.fn.zero_like_grad()
         self.global_delta = self.fn.zero_like_grad()
-
-    def prepare(self):
-        pass
 
     def step(self) -> float:
         # Broadcast compressed Delta_t to all workers

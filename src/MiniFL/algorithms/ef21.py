@@ -23,15 +23,9 @@ class Ef21Client(Client):
         gamma: float,
     ):
         super().__init__(fn=fn)
-
         self.uplink_compressor = uplink_compressor
-
         self.gamma = gamma
-
         self.g = self.fn.zero_like_grad()
-
-    def prepare(self):
-        pass
 
     def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, ClientStepMetrics):
         self.fn.step(-broadcasted_master_tensor * self.gamma)
@@ -53,42 +47,33 @@ class Ef21Master(Master):
     def __init__(
         self,
         # Task
-        fn: DifferentiableFn,
+        size: int,
         num_clients: int,
         # Hyperparameters
         gamma: float,
     ):
-        super().__init__(fn=fn, num_clients=num_clients)
+        super().__init__(size=size, num_clients=num_clients)
         self.gamma = gamma
-        self.compressor = IdentityCompressor(fn.size())
+        self.compressor = IdentityCompressor(size)
 
-        self.g = self.fn.zero_like_grad()
-
-    def prepare(self):
-        pass
+        self.g = torch.zeros(size)
 
     def step(self, sum_worker_tensor: FloatTensor) -> (Message, MasterStepMetrics):
-        value = self.fn.get_value()
         self.g = self.g + sum_worker_tensor / self.num_clients
-        self.fn.step(-self.g * self.gamma)
         msg = self.compressor.compress(self.g)
 
         self.step_num += 1
-        return msg, MasterStepMetrics(
-            step=self.step_num - 1,
-            value=value,
-            grad_norm=torch.linalg.vector_norm(self.g).item(),
-        )
+        return msg
 
 
 def get_ef21_master_and_clients(
-    master_fn: DifferentiableFn,
     client_fns: Collection[DifferentiableFn],
     compressors: Collection[Compressor],
     gamma: float = None,
     gamma_multiplier: float = None,
 ) -> Tuple[Ef21Master, Collection[Ef21Client]]:
     num_clients = len(client_fns)
+    size = client_fns[0].size()
     if gamma is None:
         if gamma_multiplier is None:
             raise ValueError("Either gamma or gamma_multiplier must be specified")
@@ -102,7 +87,7 @@ def get_ef21_master_and_clients(
         )
 
     master = Ef21Master(
-        fn=master_fn,
+        size=size,
         num_clients=num_clients,
         gamma=gamma,
     )

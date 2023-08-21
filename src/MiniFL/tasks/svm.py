@@ -58,17 +58,8 @@ def get_svm_fns(
 
 def get_svm_regression_fns(
     data_path: os.PathLike, num_clients: int, batch_size: int, weight: torch.Tensor = None, seed: int = 0
-) -> Tuple[DifferentiableFn, Collection[DifferentiableFn]]:
+) -> Collection[DifferentiableFn]:
     eval_data, clients_data = get_data_(data_path=data_path, num_clients=num_clients)
-
-    loss_fn = torch.nn.BCEWithLogitsLoss()
-
-    master_fn = LogisticRegression(
-        data=eval_data,
-        batch_size=batch_size,
-        weight=weight,
-        seed=seed,
-    )
 
     client_fns = [
         LogisticRegression(
@@ -79,4 +70,4 @@ def get_svm_regression_fns(
         )
         for i in range(num_clients)
     ]
-    return master_fn, client_fns
+    return client_fns

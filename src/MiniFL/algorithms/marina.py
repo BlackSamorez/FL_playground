@@ -40,7 +40,7 @@ class MarinaClient(Client):
 
         self.grad_prev = None
 
-    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, ClientStepMetrics):
+    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, FloatTensor, ClientStepMetrics):
         self.fn.step(-broadcasted_master_tensor * self.gamma)
         # Construct and send g_i^{k+1}
         flattened_grad = self.fn.get_flat_grad_estimate()
@@ -52,10 +52,14 @@ class MarinaClient(Client):
         self.grad_prev = flattened_grad
 
         self.step_num += 1
-        return msg, ClientStepMetrics(
-            step=self.step_num,
-            value=self.fn.get_value(),
-            grad_norm=torch.linalg.vector_norm(flattened_grad),
+        return (
+            msg,
+            flattened_grad,
+            ClientStepMetrics(
+                step=self.step_num,
+                value=self.fn.get_value(),
+                grad_norm=torch.linalg.vector_norm(flattened_grad),
+            ),
         )
 
 
@@ -63,43 +67,36 @@ class MarinaMaster(Master):
     def __init__(
         self,
         # Task
-        fn: DifferentiableFn,
+        size: int,
         num_clients: int,
         # Hyperparameters
         gamma: float,
         p: float,
         seed: int = 0,
     ):
-        super().__init__(fn=fn, num_clients=num_clients)
-        self.downlink_compressor = IdentityCompressor(fn.size())
+        super().__init__(size=size, num_clients=num_clients)
+        self.downlink_compressor = IdentityCompressor(size)
 
         self.generator = torch.Generator()
         self.generator.manual_seed(seed)
         self.p = p
         self.gamma = gamma
 
-        self.g_prev = self.fn.zero_like_grad()
+        self.g_prev = torch.zeros(size)
 
-    def step(self, sum_worker_tensor: FloatTensor = None) -> (Message, MasterStepMetrics):
-        value = self.fn.get_value()
+    def step(self, sum_worker_tensor: FloatTensor = None) -> Message:
         # g_{k+1} = \sum_{i=1}^n g_i^{k+1}
         c = get_c(self.generator, self.p)
         if c or self.step_num == 0:  # always receive full grad on first step
             self.g_prev = sum_worker_tensor / self.num_clients
         else:
             self.g_prev += sum_worker_tensor / self.num_clients
-        self.fn.step(-self.g_prev * self.gamma)
 
         self.step_num += 1
-        return self.downlink_compressor.compress(self.g_prev), MasterStepMetrics(
-            step=self.step_num - 1,
-            value=value,
-            grad_norm=torch.linalg.vector_norm(self.g_prev).item(),
-        )
+        return self.downlink_compressor.compress(self.g_prev)
 
 
 def get_marina_master_and_clients(
-    master_fn: DifferentiableFn,
     client_fns: Collection[DifferentiableFn],
     compressors: Collection[Compressor],
     p: float,
@@ -108,6 +105,8 @@ def get_marina_master_and_clients(
     seed: int = 0,
 ) -> Tuple[MarinaMaster, Collection[MarinaClient]]:
     num_clients = len(client_fns)
+    size = client_fns[0].size()
+
     if gamma is None:
         if gamma_multiplier is None:
             raise ValueError("Either gamma or gamma_multiplier must be specified")
@@ -117,7 +116,7 @@ def get_marina_master_and_clients(
         gamma = gamma_multiplier / mean_square_liptschitz_gradient_constant
 
     master = MarinaMaster(
-        fn=master_fn,
+        size=size,
         num_clients=num_clients,
         gamma=gamma,
         p=p,
@@ -139,7 +138,6 @@ def get_marina_master_and_clients(
 
 
 def get_permk_marina_master_and_clients(
-    master_fn: DifferentiableFn,
     client_fns: Collection[DifferentiableFn],
     p: float,
     gamma: float = None,
@@ -148,8 +146,10 @@ def get_permk_marina_master_and_clients(
     seed: int = 0,
 ) -> Tuple[MarinaMaster, Collection[MarinaClient]]:
     num_clients = len(client_fns)
+    size = client_fns[0].size()
+
     compressors = [
-        PermKUnbiasedCompressor(master_fn.size, rank=i, world_size=len(client_fns), seed=compressors_seed)
+        PermKUnbiasedCompressor(size, rank=i, world_size=len(client_fns), seed=compressors_seed)
         for i in range(len(client_fns))
     ]
 
@@ -172,7 +172,6 @@ def get_permk_marina_master_and_clients(
         gamma = gamma_multiplier / m
 
     return get_marina_master_and_clients(
-        master_fn=master_fn,
         client_fns=client_fns,
         compressors=compressors,
         p=p,

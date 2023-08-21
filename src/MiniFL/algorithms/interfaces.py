@@ -22,18 +22,18 @@ class Client(ABC):
         self.step_num = 0
 
     @abstractmethod
-    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, ClientStepMetrics):
+    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, FloatTensor, ClientStepMetrics):
         pass
 
 
 class Master(ABC):
-    def __init__(self, fn: DifferentiableFn, num_clients: int):
-        self.fn = fn
+    def __init__(self, size: int, num_clients: int):
+        self.size = size
         self.num_clients = num_clients
         self.step_num = 0
 
     @abstractmethod
-    def step(self, sum_worker_tensor: FloatTensor) -> (Message, MasterStepMetrics):
+    def step(self, sum_worker_tensor: FloatTensor) -> Message:
         pass
 
 
@@ -46,20 +46,29 @@ def run_algorithm_sequantially(master: Master, clients: Collection[Client], num_
     total_bits_downlink = 0
     master_metrics = []
 
-    broadcasted_master_tensor = torch.zeros_like(master.fn.zero_like_grad())
-    sum_worker_tensors = torch.zeros_like(master.fn.zero_like_grad())
+    broadcasted_master_tensor = torch.zeros(master.size)
+    sum_worker_tensors = torch.zeros(master.size)
     for step in trange(num_steps):
         worker_results = [worker_process_(client, broadcasted_master_tensor) for client in clients]
+        total_grad_norm = torch.linalg.vector_norm(sum(result[1] for result in worker_results)) / len(clients)
+        total_value = sum(result[2].value for result in worker_results) / len(clients)
+
         sum_worker_tensors = sum(result[0].data for result in worker_results)
         total_bits_uplink += sum(result[0].size for result in worker_results)
 
-        master_result = master.step(sum_worker_tensors)
-        broadcasted_master_tensor = master_result[0].data
-        total_bits_downlink += master_result[0].size
-        master_metrics_ = master_result[1]
-        master_metrics_.total_bits_received = total_bits_uplink
-        master_metrics_.total_bits_sent = total_bits_downlink
-        master_metrics.append(master_metrics_)
+        broadcasted_master_msg = master.step(sum_worker_tensors)
+        broadcasted_master_tensor = broadcasted_master_msg.data
+        total_bits_downlink += broadcasted_master_msg.size
+
+        master_metrics.append(
+            MasterStepMetrics(
+                step=step,
+                value=total_value,
+                grad_norm=total_grad_norm,
+                total_bits_received=total_bits_uplink,
+                total_bits_sent=total_bits_downlink,
+            )
+        )
 
     return master_metrics
 
@@ -69,24 +78,33 @@ def run_algorithm_with_threads(master: Master, clients: Collection[Client], num_
     total_bits_downlink = 0
     master_metrics = []
     with ThreadPool(num_threads) as pool:
-        broadcasted_master_tensor = torch.zeros_like(master.fn.zero_like_grad())
+        broadcasted_master_tensor = torch.zeros(master.size)
         broadcasted_master_tensor.share_memory_()
-        sum_worker_tensors = torch.zeros_like(master.fn.zero_like_grad())
+        sum_worker_tensors = torch.zeros(master.size)
         for step in trange(num_steps):
             worker_results = pool.starmap(
                 worker_process_,
                 [(client, broadcasted_master_tensor) for client in clients],
             )
+            total_grad_norm = torch.linalg.vector_norm(sum(result[1] for result in worker_results)) / len(clients)
+            total_value = sum(result[2].value for result in worker_results) / len(clients)
+
             sum_worker_tensors = sum(result[0].data for result in worker_results)
             total_bits_uplink += sum(result[0].size for result in worker_results)
 
-            master_result = master.step(sum_worker_tensors)
-            broadcasted_master_tensor = master_result[0].data
-            total_bits_downlink += master_result[0].size
-            master_metrics_ = master_result[1]
-            master_metrics_.total_bits_received = total_bits_uplink
-            master_metrics_.total_bits_sent = total_bits_downlink
-            master_metrics.append(master_metrics_)
+            broadcasted_master_msg = master.step(sum_worker_tensors)
+            broadcasted_master_tensor = broadcasted_master_msg.data
+            total_bits_downlink += broadcasted_master_msg.size
+
+            master_metrics.append(
+                MasterStepMetrics(
+                    step=step,
+                    value=total_value,
+                    grad_norm=total_grad_norm,
+                    total_bits_received=total_bits_uplink,
+                    total_bits_sent=total_bits_downlink,
+                )
+            )
 
     return master_metrics
 
@@ -96,23 +114,32 @@ def run_algorithm_with_processes(master: Master, clients: Collection[Client], nu
     total_bits_downlink = 0
     master_metrics = []
     with Pool(num_processes) as pool:
-        broadcasted_master_tensor = torch.zeros_like(master.fn.zero_like_grad())
+        broadcasted_master_tensor = torch.zeros(master.size)
         broadcasted_master_tensor.share_memory_()
-        sum_worker_tensors = torch.zeros_like(master.fn.zero_like_grad())
+        sum_worker_tensors = torch.zeros(master.size)
         for step in trange(num_steps):
             worker_results = pool.starmap(
                 worker_process_,
                 [(client, broadcasted_master_tensor) for client in clients],
             )
+            total_grad_norm = torch.linalg.vector_norm(sum(result[1] for result in worker_results)) / len(clients)
+            total_value = sum(result[2].value for result in worker_results) / len(clients)
+
             sum_worker_tensors = sum(result[0].data for result in worker_results)
             total_bits_uplink += sum(result[0].size for result in worker_results)
 
-            master_result = master.step(sum_worker_tensors)
-            broadcasted_master_tensor = master_result[0].data
-            total_bits_downlink += master_result[0].size
-            master_metrics_ = master_result[1]
-            master_metrics_.total_bits_received = total_bits_uplink
-            master_metrics_.total_bits_sent = total_bits_downlink
-            master_metrics.append(master_metrics_)
+            broadcasted_master_msg = master.step(sum_worker_tensors)
+            broadcasted_master_tensor = broadcasted_master_msg.data
+            total_bits_downlink += broadcasted_master_msg.size
+
+            master_metrics.append(
+                MasterStepMetrics(
+                    step=step,
+                    value=total_value,
+                    grad_norm=total_grad_norm,
+                    total_bits_received=total_bits_uplink,
+                    total_bits_sent=total_bits_downlink,
+                )
+            )
 
     return master_metrics

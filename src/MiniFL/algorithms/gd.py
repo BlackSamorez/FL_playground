@@ -21,55 +21,45 @@ class GDClient(Client):
         self.compressor = IdentityCompressor(fn.size())
         self.gamma = gamma
 
-    def prepare(self):
-        pass
-
-    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, ClientStepMetrics):
+    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, FloatTensor, ClientStepMetrics):
         self.fn.step(-broadcasted_master_tensor * self.gamma)
         grad_estimate = self.fn.get_flat_grad_estimate()
         self.step_num += 1
-        return self.compressor.compress(grad_estimate), ClientStepMetrics(
-            step=self.step_num - 1,
-            value=self.fn.get_value(),
-            grad_norm=torch.linalg.vector_norm(grad_estimate),
+        return (
+            self.compressor.compress(grad_estimate),
+            grad_estimate,
+            ClientStepMetrics(
+                step=self.step_num - 1,
+                value=self.fn.get_value(),
+                grad_norm=torch.linalg.vector_norm(grad_estimate),
+            ),
         )
 
 
 class GDMaster(Master):
     def __init__(
         self,
-        fn: DifferentiableFn,
+        size: int,
         num_clients: int,
         gamma: float,
     ):
-        super().__init__(fn=fn, num_clients=num_clients)
+        super().__init__(size=size, num_clients=num_clients)
         self.gamma = gamma
-        self.compressor = IdentityCompressor(fn.size())
+        self.compressor = IdentityCompressor(size)
 
-    def prepare(self):
-        pass
-
-    def step(self, sum_worker_tensor: FloatTensor) -> (Message, MasterStepMetrics):
-        value = self.fn.get_value()
+    def step(self, sum_worker_tensor: FloatTensor) -> Message:
         global_grad_estimate = sum_worker_tensor / self.num_clients
-        self.fn.step(-global_grad_estimate * self.gamma)
-        msg = self.compressor.compress(global_grad_estimate)
-
         self.step_num += 1
-        return msg, MasterStepMetrics(
-            step=self.step_num - 1,
-            value=value,
-            grad_norm=torch.linalg.vector_norm(global_grad_estimate).item(),
-        )
+        return self.compressor.compress(global_grad_estimate)
 
 
 def get_gd_master_and_clients(
-    master_fn: DifferentiableFn,
     client_fns: Collection[DifferentiableFn],
     gamma: float = None,
     gamma_multiplier: float = None,
 ) -> Tuple[GDMaster, Collection[GDClient]]:
     num_clients = len(client_fns)
+    size = client_fns[0].size()
     if gamma is None:
         if gamma_multiplier is None:
             raise ValueError("Either gamma or gamma_multiplier must be specified")
@@ -77,7 +67,7 @@ def get_gd_master_and_clients(
         gamma = gamma_multiplier / mean_liptschitz_gradient_constant
 
     master = GDMaster(
-        fn=master_fn,
+        size=size,
         num_clients=num_clients,
         gamma=gamma,
     )

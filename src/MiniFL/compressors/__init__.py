@@ -1,5 +1,6 @@
 from .basic import (
     IdentityCompressor,
+    PermKContractiveCompressor,
     PermKUnbiasedCompressor,
     RandKContractiveCompressor,
     RandKUnbiasedCompressor,

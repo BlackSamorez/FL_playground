@@ -100,7 +100,7 @@ class RandKContractiveCompressor(RandKBaseCompressor, ContractiveCompressor):
         return self.k / self.size
 
 
-class PermKUnbiasedCompressor(UnbiasedCompressor, InputVarianceCompressor):
+class PermKBaseCompressor(Compressor):
     def __init__(self, size: int, rank: int, world_size: int, seed=0):
         super().__init__(size=size)
 
@@ -112,7 +112,7 @@ class PermKUnbiasedCompressor(UnbiasedCompressor, InputVarianceCompressor):
     def compress(self, x: FloatTensor) -> Message:
         partition_id = torch.randperm(self.world_size, generator=self.generator)[self.rank]
         indexes = torch.tensor_split(torch.randperm(x.numel(), generator=self.generator), self.world_size)[partition_id]
-        values = x[indexes] * self.world_size
+        values = x[indexes]
 
         return Message(
             data=self.__decompress(indexes, values, x.shape),
@@ -124,6 +124,13 @@ class PermKUnbiasedCompressor(UnbiasedCompressor, InputVarianceCompressor):
         x[indexes] = values
         return x
 
+
+class PermKUnbiasedCompressor(PermKBaseCompressor, UnbiasedCompressor, InputVarianceCompressor):
+    def compress(self, x: FloatTensor) -> Message:
+        msg = super().compress(x=x)
+        msg.data *= self.world_size
+        return msg
+
     def ab(self) -> (float, float):
         if self.size >= self.world_size:
             return 1, 1
@@ -133,3 +140,8 @@ class PermKUnbiasedCompressor(UnbiasedCompressor, InputVarianceCompressor):
 
     def omega(self) -> float:
         return self.world_size - 1
+
+
+class PermKContractiveCompressor(PermKBaseCompressor, ContractiveCompressor):
+    def alpha(self) -> float:
+        return self.world_size / self.size

@@ -83,7 +83,7 @@ class TopSigmaCompressor(ContractiveCompressor):
         if self.real_rotation:
             pre_rotation_size = data.shape[0]
             compression_result["pre_rotation_size"] = pre_rotation_size
-            rotation_seed = self.generator.seed() % 2**32
+            rotation_seed = self.generator.seed() % 2**32  # TODO: get_state()
             compression_result["rotation_seed"] = rotation_seed
             np.random.seed(seed=rotation_seed)
             data = torch.from_numpy(ortho_group.rvs(pre_rotation_size) @ data.numpy()).to(data.device).to(data.dtype)
@@ -94,7 +94,7 @@ class TopSigmaCompressor(ContractiveCompressor):
                 dim_with_pad = 2 ** (math.floor(math.log2(unpadded_size)) + 1)
                 data = F.pad(data, (0, dim_with_pad - unpadded_size))
 
-            rotation_seed = self.generator.seed()
+            rotation_seed = self.generator.get_state()
             compression_result["rotation_seed"] = rotation_seed
             data = randomized_hadamard_transform_(data, self.generator)
 
@@ -123,7 +123,7 @@ class TopSigmaCompressor(ContractiveCompressor):
             data = torch.from_numpy(inv(ortho_group.rvs(pre_rotation_size)) @ data.numpy()).to(data.device)
         else:
             rotation_seed = compression_result["rotation_seed"]
-            data = inverse_randomized_hadamard_transform_(data, self.generator.manual_seed(rotation_seed))
+            data = inverse_randomized_hadamard_transform_(data, self.generator.set_state(rotation_seed))
 
             unpadded_size = compression_result["unpadded_size"]
             data = data[:unpadded_size]

@@ -27,7 +27,7 @@ class Ef21Client(Client):
         self.gamma = gamma
         self.g = self.fn.zero_like_grad()
 
-    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, ClientStepMetrics):
+    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, FloatTensor, ClientStepMetrics):
         self.fn.step(-broadcasted_master_tensor * self.gamma)
 
         grad_estimate = self.fn.get_flat_grad_estimate()
@@ -36,10 +36,14 @@ class Ef21Client(Client):
 
         grad_estimate = self.fn.get_flat_grad_estimate()
         self.step_num += 1
-        return msg, ClientStepMetrics(
-            step=self.step_num - 1,
-            value=self.fn.get_value(),
-            grad_norm=torch.linalg.vector_norm(grad_estimate),
+        return (
+            msg,
+            grad_estimate,
+            ClientStepMetrics(
+                step=self.step_num - 1,
+                value=self.fn.get_value(),
+                grad_norm=torch.linalg.vector_norm(grad_estimate),
+            ),
         )
 
 

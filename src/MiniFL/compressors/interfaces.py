@@ -29,5 +29,5 @@ class ContractiveCompressor(Compressor):
 
 class InputVarianceCompressor(Compressor):
     @abstractmethod
-    def ab() -> (float, float):
+    def ab(self) -> (float, float):
         pass

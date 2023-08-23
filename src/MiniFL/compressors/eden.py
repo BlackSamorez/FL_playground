@@ -14,16 +14,24 @@ from torch import FloatTensor
 from MiniFL.message import Message
 
 from .basic import RandKBaseCompressor
-from .interfaces import Compressor, ContractiveCompressor, UnbiasedCompressor
+from .interfaces import Compressor, ContractiveCompressor, InputVarianceCompressor, UnbiasedCompressor
 
 QuantizationType = Literal["max_lloyd", "ee"]
 
 
 class EdenBaseCompressor(Compressor):
     def __init__(
-        self, size: int, bits: float, real_rotation=False, q_type: QuantizationType = "max_lloyd", device="cpu", seed=0
+        self,
+        size: int,
+        bits: float,
+        real_rotation=False,
+        world_size: int = None,
+        q_type: QuantizationType = "max_lloyd",
+        device="cpu",
+        seed=0,
     ):
         self.bits = bits
+        self.world_size = world_size
 
         # Sparcification
         if self.bits < 1:
@@ -190,7 +198,7 @@ class EdenBaseCompressor(Compressor):
         return x
 
 
-class EdenUnbiasedCompressor(EdenBaseCompressor, UnbiasedCompressor):
+class EdenUnbiasedCompressor(EdenBaseCompressor, UnbiasedCompressor, InputVarianceCompressor):
     def get_scale(self, x: FloatTensor, unscaled_centers_vec: FloatTensor) -> float:
         scale = sum_squares(x) / (unscaled_centers_vec @ x)
         if self.p < 1:
@@ -212,6 +220,15 @@ class EdenUnbiasedCompressor(EdenBaseCompressor, UnbiasedCompressor):
             )
         else:
             return 1 / (1 - vars[self.bits]) - 1
+
+    def ab(self) -> (float, float):
+        if self.fractional_bits or self.bits != 1:
+            raise NotImplementedError("Only implemented for bits=1")
+
+        if self.world_size is None:
+            raise AttributeError("world_size must be set for Input Variance")
+
+        return (torch.pi / 2 - 1) / self.world_size, 0
 
 
 class EdenContractiveCompressor(EdenBaseCompressor, ContractiveCompressor):

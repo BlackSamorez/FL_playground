@@ -30,13 +30,15 @@ class EdenBaseCompressor(Compressor):
         device="cpu",
         seed=0,
     ):
+        super().__init__(size=size)
+        self.hadamard_size = 2 ** (math.floor(math.log2(self.size)) + 1)
         self.bits = bits
         self.world_size = world_size
 
         # Sparcification
         if self.bits < 1:
             self.p = bits
-            self.random_k = RandKBaseCompressor(size, p=self.p, seed=seed)
+            self.random_k = RandKBaseCompressor(self.size if real_rotation else self.hadamard_size, p=self.p, seed=seed)
             self.bits = 1
         else:
             self.p = 1
@@ -102,11 +104,8 @@ class EdenBaseCompressor(Compressor):
             np.random.seed(seed=rotation_seed)
             data = torch.from_numpy(ortho_group.rvs(pre_rotation_size) @ data.numpy()).to(data.device).to(data.dtype)
         else:
-            unpadded_size = data.numel()
-            compression_result["unpadded_size"] = unpadded_size
-            if unpadded_size & (unpadded_size - 1) != 0:
-                dim_with_pad = 2 ** (math.floor(math.log2(unpadded_size)) + 1)
-                data = F.pad(data, (0, dim_with_pad - unpadded_size))
+            if self.size & (self.size - 1) != 0:
+                data = F.pad(data, (0, self.hadamard_size - self.size))
 
             rotation_seed = self.generator.get_state()
             compression_result["rotation_seed"] = rotation_seed
@@ -186,10 +185,7 @@ class EdenBaseCompressor(Compressor):
             data = torch.from_numpy(inv(ortho_group.rvs(pre_rotation_size)) @ data.numpy()).to(data.device)
         else:
             rotation_seed = compression_result["rotation_seed"]
-            data = inverse_randomized_hadamard_transform_(data, self.generator.set_state(rotation_seed))
-
-            unpadded_size = compression_result["unpadded_size"]
-            data = data[:unpadded_size]
+            data = inverse_randomized_hadamard_transform_(data, self.generator.set_state(rotation_seed))[: self.size]
 
         # Unflatten
         original_shape = compression_result["original_shape"]
@@ -200,10 +196,7 @@ class EdenBaseCompressor(Compressor):
 
 class EdenUnbiasedCompressor(EdenBaseCompressor, UnbiasedCompressor, InputVarianceCompressor):
     def get_scale(self, x: FloatTensor, unscaled_centers_vec: FloatTensor) -> float:
-        scale = sum_squares(x) / (unscaled_centers_vec @ x)
-        if self.p < 1:
-            scale /= self.p
-        return scale
+        return sum_squares(x) / (unscaled_centers_vec @ x) / self.p
 
     def omega(self) -> float:
         if self.p < 1:

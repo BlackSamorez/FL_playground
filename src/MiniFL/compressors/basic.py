@@ -15,12 +15,9 @@ class IdentityCompressor(UnbiasedCompressor):
 
     def compress(self, x: FloatTensor) -> Message:
         return Message(
-            data=(x,),
+            data=x,
             size=x.numel() * get_num_bits(x.dtype),
         )
-
-    def decompress(self, msg: Message) -> FloatTensor:
-        return msg.data[0]
 
     def omega(self) -> float:
         return 0
@@ -41,15 +38,13 @@ class TopKCompressor(ContractiveCompressor):
         values = x[indexes]
 
         return Message(
-            data=(indexes, values),
+            data=self.__decompress(indexes, values, x.shape),
             size=values.numel() * get_num_bits(values.dtype)
             + min(self.k * math.log2(x.numel()), (x.numel() - self.k) * math.log2(x.numel()), x.numel()),
-            metadata={"shape": x.shape},
         )
 
-    def decompress(self, msg: Message) -> FloatTensor:
-        indexes, values = msg.data
-        x = torch.zeros(msg.metadata["shape"], dtype=values.dtype, device=values.device)
+    def __decompress(self, indexes, values, shape) -> FloatTensor:
+        x = torch.zeros(shape, dtype=values.dtype, device=values.device)
         x[indexes] = values
         return x
 
@@ -71,18 +66,20 @@ class RandKBaseCompressor(Compressor):
         self.generator.manual_seed(seed)
 
     def compress(self, x: FloatTensor) -> Message:
+        indexes, values, shape = self.inner_compress(x=x)
+        return Message(
+            data=self.inner_decompress(indexes, values, x.shape),
+            size=self.k * get_num_bits(values.dtype),
+        )
+
+    def inner_compress(self, x: FloatTensor) -> (Tensor, FloatTensor, torch.Size):
         indexes = torch.randperm(x.numel(), generator=self.generator)[: self.k]
         values = x[indexes]
 
-        return Message(
-            data=(indexes, values),
-            size=self.k * get_num_bits(values.dtype),
-            metadata={"shape": x.shape},
-        )
+        return indexes, values, x.shape
 
-    def decompress(self, msg: Message) -> FloatTensor:
-        indexes, values = msg.data
-        x = torch.zeros(msg.metadata["shape"], dtype=values.dtype, device=values.device)
+    def inner_decompress(self, indexes, values, shape) -> FloatTensor:
+        x = torch.zeros(shape, dtype=values.dtype, device=values.device)
         x[indexes] = values
         return x
 
@@ -91,7 +88,7 @@ class RandKUnbiasedCompressor(RandKBaseCompressor, UnbiasedCompressor):
     def compress(self, x: FloatTensor) -> Message:
         msg = super().compress(x=x)
         scale = self.size / self.k
-        msg.data = (msg.data[0], msg.data[1] * scale)
+        msg.data *= scale
         return msg
 
     def omega(self) -> float:
@@ -103,7 +100,7 @@ class RandKContractiveCompressor(RandKBaseCompressor, ContractiveCompressor):
         return self.k / self.size
 
 
-class PermKUnbiasedCompressor(UnbiasedCompressor, InputVarianceCompressor):
+class PermKBaseCompressor(Compressor):
     def __init__(self, size: int, rank: int, world_size: int, seed=0):
         super().__init__(size=size)
 
@@ -115,19 +112,24 @@ class PermKUnbiasedCompressor(UnbiasedCompressor, InputVarianceCompressor):
     def compress(self, x: FloatTensor) -> Message:
         partition_id = torch.randperm(self.world_size, generator=self.generator)[self.rank]
         indexes = torch.tensor_split(torch.randperm(x.numel(), generator=self.generator), self.world_size)[partition_id]
-        values = x[indexes] * self.world_size
+        values = x[indexes]
 
         return Message(
-            data=(indexes, values),
+            data=self.__decompress(indexes, values, x.shape),
             size=values.numel() * get_num_bits(values.dtype),
-            metadata={"shape": x.shape},
         )
 
-    def decompress(self, msg: Message) -> FloatTensor:
-        indexes, values = msg.data
-        x = torch.zeros(msg.metadata["shape"], dtype=values.dtype, device=values.device)
+    def __decompress(self, indexes, values, shape) -> FloatTensor:
+        x = torch.zeros(shape, dtype=values.dtype, device=values.device)
         x[indexes] = values
         return x
+
+
+class PermKUnbiasedCompressor(PermKBaseCompressor, UnbiasedCompressor, InputVarianceCompressor):
+    def compress(self, x: FloatTensor) -> Message:
+        msg = super().compress(x=x)
+        msg.data *= self.world_size
+        return msg
 
     def ab(self) -> (float, float):
         if self.size >= self.world_size:
@@ -138,3 +140,8 @@ class PermKUnbiasedCompressor(UnbiasedCompressor, InputVarianceCompressor):
 
     def omega(self) -> float:
         return self.world_size - 1
+
+
+class PermKContractiveCompressor(PermKBaseCompressor, ContractiveCompressor):
+    def alpha(self) -> float:
+        return self.world_size / self.size

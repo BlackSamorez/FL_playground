@@ -83,18 +83,12 @@ class CocktailCompressor(Compressor):
         )
 
         return Message(
-            data=(rand_indexes, top_indexes, quantized_values),
+            data=self.__decompress(rand_indexes, top_indexes, quantized_values, rand_values.shape, x.shape, scale),
             size=top_k_msg.size - top_values.numel() * get_num_bits(top_values.dtype) + top_values.numel() * self.bits,
-            metadata={"rand_shape": x.shape, "top_shape": rand_values.shape, "scale": scale},
         )
 
-    def decompress(self, msg: Message) -> FloatTensor:
-        rand_indexes, top_indexes, quantized_values = msg.data
-        top_values = _decompress_nbits(quantized_values, msg.metadata["scale"], self.bits)
-        rand_values = self.top_k.decompress(
-            Message(data=(top_indexes, top_values), size=0, metadata={"shape": msg.metadata["top_shape"]})
-        )
-        x = self.rand_k.decompress(
-            Message(data=(rand_indexes, rand_values), size=0, metadata={"shape": msg.metadata["rand_shape"]})
-        )
+    def __decompress(self, rand_indexes, top_indexes, quantized_values, top_shape, rand_shape, scale) -> FloatTensor:
+        top_values = _decompress_nbits(quantized_values, scale, self.bits)
+        rand_values = self.top_k.decompress(top_indexes, top_values, top_shape)
+        x = self.rand_k.decompress(rand_indexes, rand_values, rand_shape)
         return x

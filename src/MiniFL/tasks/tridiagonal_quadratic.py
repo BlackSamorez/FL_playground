@@ -84,7 +84,7 @@ def create_worst_case_tridiagonal_quadratics(
     size: int,
     liptschitz_gradient_constant: float = 1,
     noise_lambda: float = 0.1,
-    strongly_convex_constant: float = 1e-5,
+    strongly_convex_constant: float = 1e-6,
     seed: int = 0,
 ):
     main_diags = []
@@ -105,4 +105,4 @@ def create_worst_case_tridiagonal_quadratics(
         main_diag = main_diag - min_eig
         main_diag = main_diag + strongly_convex_constant
         funcs.append(TridiagonalQuadraticFn(main_diag, side_diag, b))
-    return MeanDifferentiableFn(funcs), funcs
+    return funcs

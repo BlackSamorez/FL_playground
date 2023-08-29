@@ -7,9 +7,6 @@ from sklearn.datasets import load_svmlight_file
 
 from MiniFL.fn import DifferentiableFn, LogisticRegression, NNDifferentiableFn
 
-W8A_NUM_FEATURES = 300
-W8A_NUM_DATAPOINTS = 49749
-
 
 def get_data_(
     data_path: os.PathLike, num_clients: int
@@ -31,7 +28,7 @@ def get_data_(
     return eval_data, clients_data
 
 
-def get_w8a_fns(
+def get_svm_fns(
     data_path: os.PathLike, model: torch.nn.Module, num_clients: int, batch_size: int, seed: int = 0
 ) -> Tuple[DifferentiableFn, Collection[DifferentiableFn]]:
     eval_data, clients_data = get_data_(data_path=data_path, num_clients=num_clients)
@@ -59,19 +56,10 @@ def get_w8a_fns(
     return master_fn, client_fns
 
 
-def get_w8a_regression_fns(
+def get_svm_regression_fns(
     data_path: os.PathLike, num_clients: int, batch_size: int, weight: torch.Tensor = None, seed: int = 0
-) -> Tuple[DifferentiableFn, Collection[DifferentiableFn]]:
+) -> Collection[DifferentiableFn]:
     eval_data, clients_data = get_data_(data_path=data_path, num_clients=num_clients)
-
-    loss_fn = torch.nn.BCEWithLogitsLoss()
-
-    master_fn = LogisticRegression(
-        data=eval_data,
-        batch_size=batch_size,
-        weight=weight,
-        seed=seed,
-    )
 
     client_fns = [
         LogisticRegression(
@@ -82,4 +70,4 @@ def get_w8a_regression_fns(
         )
         for i in range(num_clients)
     ]
-    return master_fn, client_fns
+    return client_fns

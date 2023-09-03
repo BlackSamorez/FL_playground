@@ -2,6 +2,7 @@ import math
 from typing import Collection, Tuple
 
 import torch
+from scipy.optimize import minimize
 from torch import FloatTensor
 
 from MiniFL.compressors import Compressor, IdentityCompressor, PermKUnbiasedCompressor
@@ -97,10 +98,34 @@ class MarinaMaster(Master):
         return self.downlink_compressor.compress(self.g_prev)
 
 
+def get_optimal_homogeneous_p(a, b, size):
+    assert b == 0, "Not implemented"
+    c = (32 + size) / (32 * size)
+
+    def func_(p):
+        return (p + (1 - p) * c) * (1 + math.sqrt((1 - p) / p * a))
+
+    result = minimize(func_, (c / 2 / abs(c - 1)) ** (2 / 3) * a ** (1 / 3), bounds=[(0, 1)])
+    assert result.success, result.message
+    return result.x[0]
+
+
+def get_theoretical_step_size_ab(a, b, client_fns, num_clients, p):
+    liptschitz_constants = [fn.liptschitz_gradient_constant() for fn in client_fns]
+    mean_liptschitz_gradient_constant = sum(liptschitz_constants) / num_clients
+    mean_square_liptschitz_gradient_constant = (sum(l**2 for l in liptschitz_constants) / num_clients) ** (1 / 2)
+    smoothness_variance = client_fns[0].smoothness_variance(client_fns)
+    assert smoothness_variance <= mean_square_liptschitz_gradient_constant**2
+    m = mean_liptschitz_gradient_constant + math.sqrt(
+        ((1 - p) / p) * ((a - b) * mean_square_liptschitz_gradient_constant**2 + b * smoothness_variance**2)
+    )
+    return 1 / m
+
+
 def get_marina_master_and_clients(
     client_fns: Collection[DifferentiableFn],
     compressors: Collection[Compressor],
-    p: float,
+    p: float = None,
     gamma: float = None,
     gamma_multiplier: float = None,
     seed: int = 0,
@@ -108,15 +133,19 @@ def get_marina_master_and_clients(
     num_clients = len(client_fns)
     size = client_fns[0].size()
 
+    if isinstance(compressors[0], InputVarianceCompressor):
+        a, b = compressors[0].ab()
+    else:
+        a, b = compressors[0].omega(), 0
+
+    if p is None:
+        p = get_optimal_homogeneous_p(a, b, size)
+
     if gamma is None:
         if gamma_multiplier is None:
             raise ValueError("Either gamma or gamma_multiplier must be specified")
-
-        if isinstance(compressors[0], InputVarianceCompressor):
-            m = get_theoretical_step_size_ab(*compressors[0].ab(), client_fns, num_clients, p)
-        else:
-            m = (sum(fn.liptschitz_gradient_constant() ** 2 for fn in client_fns) / num_clients) ** (1 / 2)
-        gamma = gamma_multiplier / m
+        gamma = get_theoretical_step_size_ab(a, b, client_fns, num_clients, p)
+        gamma *= gamma_multiplier
 
     master = MarinaMaster(
         size=size,
@@ -140,18 +169,6 @@ def get_marina_master_and_clients(
     return master, clients
 
 
-def get_theoretical_step_size_ab(a, b, client_fns, num_clients, p):
-    liptschitz_constants = [fn.liptschitz_gradient_constant() for fn in client_fns]
-    mean_liptschitz_gradient_constant = sum(liptschitz_constants) / num_clients
-    mean_square_liptschitz_gradient_constant = (sum(l**2 for l in liptschitz_constants) / num_clients) ** (1 / 2)
-    smoothness_variance = client_fns[0].smoothness_variance(client_fns)
-    assert smoothness_variance <= mean_square_liptschitz_gradient_constant**2
-    m = mean_liptschitz_gradient_constant + math.sqrt(
-        ((1 - p) / p) * ((a - b) * mean_square_liptschitz_gradient_constant**2 + b * smoothness_variance**2)
-    )
-    return 1 / m
-
-
 def get_permk_marina_master_and_clients(
     client_fns: Collection[DifferentiableFn],
     p: float,
@@ -165,7 +182,7 @@ def get_permk_marina_master_and_clients(
 
     compressors = [
         PermKUnbiasedCompressor(size, rank=i, world_size=len(client_fns), seed=compressors_seed)
-        for i in range(len(client_fns))
+        for i in range(num_clients)
     ]
 
     return get_marina_master_and_clients(

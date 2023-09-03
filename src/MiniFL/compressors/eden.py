@@ -194,7 +194,7 @@ class EdenBaseCompressor(Compressor):
         return x
 
 
-class EdenUnbiasedCompressor(EdenBaseCompressor, UnbiasedCompressor):
+class EdenUnbiasedCompressor(EdenBaseCompressor, UnbiasedCompressor, InputVarianceCompressor):
     def get_scale(self, x: FloatTensor, unscaled_centers_vec: FloatTensor) -> float:
         return sum_squares(x) / (unscaled_centers_vec @ x) / self.p
 

@@ -105,7 +105,12 @@ def get_optimal_homogeneous_p(a, b, size):
     def func_(p):
         return (p + (1 - p) * c) * (1 + math.sqrt((1 - p) / p * a))
 
-    result = minimize(func_, (c / 2 / abs(c - 1)) ** (2 / 3) * a ** (1 / 3), bounds=[(0, 1)])
+    def grad_(p):
+        return ((-b / p - b * (1 - p) / p**2) * (p + a * (1 - p))) / (2 * math.sqrt(b * (1 - p) / p)) + (1 - a) * (
+            1 + math.sqrt(b * (1 - p) / p)
+        )
+
+    result = minimize(func_, 0.5, method="SLSQP", jac=grad_, bounds=[(1e-5, 1 - 1e-5)], tol=1e-10)
     assert result.success, result.message
     return result.x[0]
 

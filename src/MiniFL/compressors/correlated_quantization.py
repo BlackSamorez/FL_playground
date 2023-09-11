@@ -44,7 +44,7 @@ class CorrelatedQuantizer(InputVarianceCompressor):
         return Message(x_decompressed, 32 + d)
 
     def ab(self) -> (float, float):
-        return 4 * self.size / self.world_size**2 / self.num_levels**2, 0
+        return self.size / 4 / self.world_size**2 / self.num_levels**2, 0
 
 
 class DeCorrelatedQuantizer(InputVarianceCompressor):

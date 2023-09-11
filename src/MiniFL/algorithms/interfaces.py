@@ -13,7 +13,7 @@ from tqdm import trange
 from MiniFL.communications import AggregatorReciever, AggregatorSender, BroadcastReceiver, BroadcastSender
 from MiniFL.fn import DifferentiableFn
 from MiniFL.message import Message
-from MiniFL.metrics import ClientStepMetrics, MasterStepMetrics
+from MiniFL.metrics import MasterStepMetrics
 
 
 class Client(ABC):
@@ -22,7 +22,7 @@ class Client(ABC):
         self.step_num = 0
 
     @abstractmethod
-    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, FloatTensor, ClientStepMetrics):
+    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, FloatTensor):
         pass
 
 
@@ -41,7 +41,7 @@ def worker_process_(client, broadcasted_master_tensor):
     return client.step(broadcasted_master_tensor)
 
 
-def run_algorithm_sequantially(master: Master, clients: Collection[Client], num_steps: int):
+def run_algorithm_sequantially(master: Master, clients: Collection[Client], num_steps: int, custom_metrics_fn=None):
     total_bits_uplink = 0
     total_bits_downlink = 0
     master_metrics = []
@@ -52,6 +52,9 @@ def run_algorithm_sequantially(master: Master, clients: Collection[Client], num_
         worker_results = [worker_process_(client, broadcasted_master_tensor) for client in clients]
         total_grad_norm = torch.linalg.vector_norm(sum(result[1] for result in worker_results)) / len(clients)
         total_value = sum(result[2].value for result in worker_results) / len(clients)
+
+        if custom_metrics_fn is not None:
+            custom_metrics = custom_metrics_fn(worker_results)
 
         sum_worker_tensors = sum(result[0].data for result in worker_results)
         total_bits_uplink += sum(result[0].size for result in worker_results)

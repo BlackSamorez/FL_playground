@@ -5,7 +5,6 @@ from torch import FloatTensor
 
 from MiniFL.compressors import CocktailCompressor, Compressor
 from MiniFL.fn import DifferentiableFn
-from MiniFL.metrics import ClientStepMetrics, MasterStepMetrics
 
 from .interfaces import Client, Master
 
@@ -47,13 +46,7 @@ class CocktailGDClient(Client):
         self.apply_updates_(grad_estimate, compressed_delta, compressed_global_delta)
 
         self.step_num += 1
-        return ClientStepMetrics(
-            step=self.step_num - 1,
-            value=value,
-            total_bits_sent=self.data_sender.n_bits_passed,
-            total_bits_received=self.data_receiver.n_bits_passed,
-            grad_norm=torch.linalg.vector_norm(grad_estimate),
-        )
+        raise NotImplementedError("TODO: return metrics")
 
     def compute_thread_(self) -> FloatTensor:
         return self.fn.get_flat_grad_estimate()
@@ -114,13 +107,7 @@ class CocktailGDMaster(Master):
             self.global_delta += compressor.decompress(msg) / len(self.data_senders)
 
         self.step_num += 1
-        return MasterStepMetrics(
-            step=self.step_num - 1,
-            value=self.fn.get_value(),
-            total_bits_sent=sum(s.n_bits_passed for s in self.data_senders),
-            total_bits_received=sum(r.n_bits_passed for r in self.data_receivers),
-            grad_norm=torch.linalg.vector_norm(compressed_global_delta),
-        )
+        raise NotImplementedError("TODO: return metrics")
 
 
 def get_cocktailgd_master_and_clients(

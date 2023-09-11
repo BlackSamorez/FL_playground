@@ -7,7 +7,6 @@ from torch import FloatTensor
 from MiniFL.compressors import Compressor, IdentityCompressor
 from MiniFL.fn import DifferentiableFn
 from MiniFL.message import Message
-from MiniFL.metrics import ClientStepMetrics, MasterStepMetrics
 
 from .interfaces import Client, Master
 
@@ -27,7 +26,7 @@ class Ef21Client(Client):
         self.gamma = gamma
         self.g = self.fn.zero_like_grad()
 
-    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, FloatTensor, ClientStepMetrics):
+    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, FloatTensor):
         self.fn.step(-broadcasted_master_tensor * self.gamma)
 
         grad_estimate = self.fn.get_flat_grad_estimate()
@@ -39,11 +38,6 @@ class Ef21Client(Client):
         return (
             msg,
             grad_estimate,
-            ClientStepMetrics(
-                step=self.step_num - 1,
-                value=self.fn.get_value(),
-                grad_norm=torch.linalg.vector_norm(grad_estimate),
-            ),
         )
 
 
@@ -62,7 +56,7 @@ class Ef21Master(Master):
 
         self.g = torch.zeros(size)
 
-    def step(self, sum_worker_tensor: FloatTensor) -> (Message, MasterStepMetrics):
+    def step(self, sum_worker_tensor: FloatTensor) -> Message:
         self.g = self.g + sum_worker_tensor / self.num_clients
         msg = self.compressor.compress(self.g)
 

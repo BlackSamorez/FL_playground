@@ -6,7 +6,6 @@ from torch import FloatTensor
 from MiniFL.compressors import IdentityCompressor
 from MiniFL.fn import DifferentiableFn
 from MiniFL.message import Message
-from MiniFL.metrics import ClientStepMetrics, MasterStepMetrics
 
 from .interfaces import Client, Master
 
@@ -21,18 +20,13 @@ class GDClient(Client):
         self.compressor = IdentityCompressor(fn.size())
         self.gamma = gamma
 
-    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, FloatTensor, ClientStepMetrics):
+    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, FloatTensor):
         self.fn.step(-broadcasted_master_tensor * self.gamma)
         grad_estimate = self.fn.get_flat_grad_estimate()
         self.step_num += 1
         return (
             self.compressor.compress(grad_estimate),
             grad_estimate,
-            ClientStepMetrics(
-                step=self.step_num - 1,
-                value=self.fn.get_value(),
-                grad_norm=torch.linalg.vector_norm(grad_estimate),
-            ),
         )
 
 

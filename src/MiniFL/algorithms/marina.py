@@ -9,7 +9,6 @@ from MiniFL.compressors import Compressor, IdentityCompressor, PermKUnbiasedComp
 from MiniFL.compressors.interfaces import InputVarianceCompressor
 from MiniFL.fn import DifferentiableFn
 from MiniFL.message import Message
-from MiniFL.metrics import ClientStepMetrics, MasterStepMetrics
 
 from .interfaces import Client, Master
 
@@ -42,7 +41,7 @@ class MarinaClient(Client):
 
         self.grad_prev = None
 
-    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, FloatTensor, ClientStepMetrics):
+    def step(self, broadcasted_master_tensor: FloatTensor) -> (Message, FloatTensor):
         self.fn.step(-broadcasted_master_tensor * self.gamma)
         # Construct and send g_i^{k+1}
         flattened_grad = self.fn.get_flat_grad_estimate()
@@ -57,11 +56,6 @@ class MarinaClient(Client):
         return (
             msg,
             flattened_grad,
-            ClientStepMetrics(
-                step=self.step_num,
-                value=self.fn.get_value(),
-                grad_norm=torch.linalg.vector_norm(flattened_grad),
-            ),
         )
 
 

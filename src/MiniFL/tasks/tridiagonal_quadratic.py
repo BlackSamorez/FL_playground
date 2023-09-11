@@ -1,27 +1,43 @@
 import math
 from typing import Collection
 
+import numpy as np
 import scipy
 import torch
 from torch import FloatTensor
 
-from MiniFL.fn import AutogradDifferentiableFn, DifferentiableFn, MeanDifferentiableFn
+from MiniFL.fn import AutogradDifferentiableFn, DifferentiableFn, MeanDifferentiableFn, ReplicatedFn
 
 
-class TridiagonalQuadraticFn(AutogradDifferentiableFn):
-    def __init__(self, main_diag, side_diag, b, arg_tensor: FloatTensor = None):
-        self.main_diag = torch.Tensor(main_diag)
-        self.side_diag = torch.Tensor(side_diag)
-        self.A = torch.Tensor(scipy.sparse.diags([side_diag, main_diag, side_diag], [-1, 0, 1]).toarray())
-        self.b = torch.Tensor(b)
+class TridiagonalQuadraticFn(DifferentiableFn):
+    def __init__(self, main_diag, side_diag, b):
+        self.main_diag = main_diag
+        self.side_diag = side_diag
+        self.A = scipy.sparse.diags([side_diag, main_diag, side_diag], [-1, 0, 1])
+        self.b = b
 
-        if arg_tensor is None:
-            arg_tensor = torch.zeros_like(self.b)
+        self.point = np.zeros_like(self.b)
 
-        super().__init__(
-            fn=lambda x: 1 / 2 * x @ self.A @ x - self.b @ x,
-            arg_tensor=arg_tensor,
-        )
+    def is_full_grad(self) -> bool:
+        return True
+
+    def get_value(self) -> float:
+        return (1 / 2.0) * np.dot(self.point, self.A.dot(self.point)) - np.dot(self.b, self.point)
+
+    def get_parameters(self) -> FloatTensor:
+        return torch.tensor(self.point)
+
+    def get_flat_grad_estimate(self) -> FloatTensor:
+        return torch.tensor(self.A.dot(self.point) - self.b)
+
+    def step(self, delta: FloatTensor):
+        self.point += delta.numpy()
+
+    def zero_like_grad(self) -> FloatTensor:
+        return torch.zeros(self.point.shape)
+
+    def size(self) -> int:
+        return len(self.point)
 
     def liptschitz_gradient_constant(self) -> float:
         eigvals = scipy.linalg.eigh_tridiagonal(self.main_diag, self.side_diag, eigvals_only=True)
@@ -29,7 +45,7 @@ class TridiagonalQuadraticFn(AutogradDifferentiableFn):
 
     @staticmethod
     def smoothness_variance(fns: Collection[DifferentiableFn]) -> float:
-        weights = torch.ones(len(fns), dtype=torch.float32) / len(fns)
+        weights = np.ones(len(fns), dtype=np.float32) / len(fns)
         for fn in fns:
             assert isinstance(fn, TridiagonalQuadraticFn)
         matrices = [fn.A for fn in fns]
@@ -49,7 +65,7 @@ class TridiagonalQuadraticFn(AutogradDifferentiableFn):
         mean_square_matrix = matrix_mean_(square_matrices, weights)
         result_matrix = mean_square_matrix - square_mean_matrix
 
-        svdvals = scipy.sparse.linalg.svds(result_matrix.numpy(), k=1, return_singular_vectors=False)
+        svdvals = scipy.sparse.linalg.svds(result_matrix, k=1, return_singular_vectors=False)
         op_norm = max(svdvals)
         svb = op_norm ** (1 / 2)
         return svb
@@ -57,20 +73,19 @@ class TridiagonalQuadraticFn(AutogradDifferentiableFn):
 
 def create_worst_case(dim, liptschitz_gradient_constant, noise_lambda=0, seed=None, strategy="mul"):
     scale = liptschitz_gradient_constant / 4.0
-    main_diag = 2 * torch.ones(dim, dtype=torch.float32)
-    side_diag = -1 * torch.ones(dim - 1, dtype=torch.float32)
-    b = torch.zeros(dim, dtype=torch.float32)
+    main_diag = 2 * np.ones(dim, dtype=np.float32)
+    side_diag = -1 * np.ones(dim - 1, dtype=np.float32)
+    b = np.zeros(dim, dtype=np.float32)
     b[0] = -1
     if noise_lambda > 0:
-        generator = torch.Generator()
-        generator.manual_seed(seed)
+        generator = np.random.default_rng(seed=seed)
         if strategy == "add":
-            noise = noise_lambda * torch.empty(1, dtype=torch.float32).exponential_(generator=generator)
+            noise = noise_lambda * generator.standard_exponential(size=(1,), dtype=np.float32)
             main_diag += noise
             side_diag += noise
         if strategy == "mul":
-            noise_scale = 1 + noise_lambda * torch.empty(1, dtype=torch.float32).normal_(generator=generator).item()
-            noise_bias = noise_lambda * torch.empty(1, dtype=torch.float32).normal_(generator=generator).item()
+            noise_scale = 1 + noise_lambda * generator.standard_normal(size=(1,), dtype=np.float32)
+            noise_bias = noise_lambda * generator.standard_normal(size=(1,), dtype=np.float32)
             b[0] += noise_bias
             b[0] *= noise_scale
             main_diag *= noise_scale
@@ -87,6 +102,23 @@ def create_worst_case_tridiagonal_quadratics(
     strongly_convex_constant: float = 1e-6,
     seed: int = 0,
 ):
+    if noise_lambda == 0:
+        main_diag, side_diag, b = create_worst_case(size, liptschitz_gradient_constant, noise_lambda, seed)
+        min_eig = min(scipy.linalg.eigh_tridiagonal(main_diag, side_diag, eigvals_only=True))
+        main_diag = main_diag - min_eig
+        main_diag = main_diag + strongly_convex_constant
+
+        return [
+            ReplicatedFn(
+                TridiagonalQuadraticFn(
+                    main_diag=main_diag,
+                    side_diag=side_diag,
+                    b=b,
+                ),
+                world_size=num_clients,
+            )
+        ] * num_clients
+
     main_diags = []
     side_diags = []
     bs = []

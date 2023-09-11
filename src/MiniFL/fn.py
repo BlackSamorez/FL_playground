@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 from copy import deepcopy
+from functools import cache
 from typing import Collection, Tuple
 
 import torch
@@ -177,3 +178,60 @@ class LogisticRegression(NNDifferentiableFn):
 
     def liptschitz_gradient_constant(self):
         return self.data[0].square().sum(dim=1).max().item()
+
+
+class ReplicatedFn(DifferentiableFn):
+    def __init__(self, fn: DifferentiableFn, world_size: int):
+        self.fn = fn
+
+        self.world_size = world_size
+        self.updates_accumulated = 0
+
+        self.grad = self.fn.zero_like_grad()
+        self.parameters = self.fn.zero_like_grad()
+        self.value = 0
+        self.needs_recalculation = True
+        self.maybe_recalculate_()
+
+    def maybe_recalculate_(self):
+        if self.needs_recalculation:
+            self.grad = self.fn.get_flat_grad_estimate()
+            self.parameters = self.fn.get_parameters()
+            self.value = self.fn.get_value()
+            self.needs_recalculation = False
+
+    def is_full_grad(self) -> bool:
+        return self.fn.is_full_grad()
+
+    def get_value(self) -> float:
+        self.maybe_recalculate_()
+        return self.value
+
+    def get_parameters(self) -> FloatTensor:
+        self.maybe_recalculate_()
+        return self.parametersss
+
+    def get_flat_grad_estimate(self) -> FloatTensor:
+        self.maybe_recalculate_()
+        return self.fn.get_flat_grad_estimate()
+
+    def step(self, delta: FloatTensor):
+        if self.updates_accumulated == 0:
+            self.fn.step(delta)
+            self.needs_recalculation = True
+
+        self.updates_accumulated = (self.updates_accumulated + 1) % self.world_size
+
+    def zero_like_grad(self) -> FloatTensor:
+        return self.fn.zero_like_grad()
+
+    def size(self) -> int:
+        return self.fn.size()
+
+    @cache
+    def liptschitz_gradient_constant(self) -> float:
+        return self.fn.liptschitz_gradient_constant()
+
+    @staticmethod
+    def smoothness_variance(fns: Collection[DifferentiableFn]) -> float:
+        return 0
